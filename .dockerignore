@@ -1,0 +1,12 @@
+node_modules/
+**/node_modules/
+.venv/
+**/.venv/
+backend/data/
+frontend/dist/
+.git/
+.gitignore
+*.log
+.env
+**/.env
+README.md

@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Dữ liệu quét + secrets
+backend/data/
+.env
+*.log
+
+# OS / editor
+.DS_Store

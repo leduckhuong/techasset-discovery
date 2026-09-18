@@ -1,0 +1,6 @@
+{
+  "name": "TechAsset Discovery - Quasar Tech Scanner",
+  "description": "Nền tảng quét và lưu trữ Tech Asset đa công cụ, tích hợp webhook nhận mã CVE từ bot cảnh báo và Agent so khớp phiên bản công nghệ để tự động phát hiện tài sản bị ảnh hưởng.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

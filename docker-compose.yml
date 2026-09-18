@@ -1,0 +1,30 @@
+services:
+  techasset:
+    build:
+      context: .
+      network: host # dùng network của máy thật khi build (một số mạng chặn NAT của Docker)
+      args:
+        NUCLEI_VERSION: "3.8.0"
+        SUBFINDER_VERSION: "2.13.0"
+    image: techasset-discovery:latest
+    container_name: techasset-discovery
+    # Dùng network của máy thật: quét ra ngoài đúng source IP/VPN, không bị NAT chặn
+    network_mode: host
+    # PORT cấu hình qua file .env cạnh docker-compose.yml (mặc định 8000)
+    environment:
+      PORT: ${PORT:-8000}
+      DB_PATH: /app/backend/data/techasset.db
+    command: sh -c "uvicorn app.main:app --host 0.0.0.0 --port $${PORT:-8000}"
+    volumes:
+      # SQLite DB + dữ liệu quét — bền vững qua các lần restart/rebuild
+      - ./backend/data:/app/backend/data
+      # Dùng nuclei templates đã tải trên máy thật (không cần tải lại trong container)
+      - ${HOME}/nuclei-templates:/root/nuclei-templates
+      # API keys cho subfinder (provider-config.yaml)
+      - ${HOME}/.config/subfinder:/root/.config/subfinder
+    # Cấu hình qua biến môi trường (xem backend/.env.example):
+    # environment:
+    #   CVE_PUSH_API_KEY: "dat-key-o-day"
+    #   NUCLEI_TIMEOUT: "180"
+    #   SCHEDULER_TZ: "Asia/Ho_Chi_Minh"
+    restart: unless-stopped
