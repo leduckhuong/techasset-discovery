@@ -61,3 +61,40 @@ def build_cve_prompt(alert: dict) -> str:
         f"Khuyến nghị hiện có: {alert.get('remediation')}\n\n"
         "Hãy đánh giá rủi ro cho asset này và đưa ra hướng xử lý cụ thể."
     )
+
+
+EXTRACT_SYSTEM_PROMPT = (
+    "Bạn là bộ parse tin nhắn CVE. Nhận tin nhắn Telegram mô tả một lỗ hổng, "
+    "trả về DUY NHẤT một JSON (không markdown, không giải thích) dạng:\n"
+    '{"cveId": "CVE-...", "software": "Tên phần mềm (VD: Sentry, Apache, Nginx)", '
+    '"affectedVersions": "dải ảnh hưởng (VD: < 25.5.0, 2.4.0 - 2.4.55, *)", '
+    '"severity": "CRITICAL|HIGH|MEDIUM|LOW", "cvssScore": số hoặc null, '
+    '"summary": "tóm tắt 1-2 câu tiếng Việt"}\n'
+    "Nếu không rõ trường nào, đoán hợp lý từ ngữ cảnh. affectedVersions không rõ thì dùng \"*\"."
+)
+
+
+async def extract_cve_from_text(text: str) -> dict:
+    """Dùng LLM parse tin nhắn CVE tự do -> JSON cấu trúc. Lỗi -> fallback regex cơ bản."""
+    import json as _json
+    import re as _re
+
+    ok, answer = await chat(EXTRACT_SYSTEM_PROMPT, text, max_tokens=600)
+    data = {}
+    if ok:
+        try:
+            m = _re.search(r"\{.*\}", answer, _re.DOTALL)
+            if m:
+                data = _json.loads(m.group(0))
+        except Exception:
+            data = {}
+
+    m = _re.search(r"CVE-\d{4}-\d{4,}", text, _re.I)
+    data.setdefault("cveId", m.group(0).upper() if m else "")
+    sev = _re.search(r"CRITICAL|HIGH|MEDIUM|LOW", (text or "").upper())
+    data.setdefault("severity", sev.group(0) if sev else "HIGH")
+    if not data.get("summary"):
+        data["summary"] = _re.sub(r"\s+", " ", text.strip())[:300]
+    data.setdefault("affectedVersions", "*")
+    data.setdefault("software", "")
+    return data

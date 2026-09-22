@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import ai, config, csv_template, cve_engine, db, discovery, httpx_engine, import_pipeline, inventory, logs, nuclei_engine, scheduler, scanner, security, telegram
+from . import ai, config, csv_template, cve_engine, db, discovery, httpx_engine, import_pipeline, inventory, logs, nuclei_engine, scheduler, scanner, security, telegram, telegram_listener
 
 logs.setup_logging()
 log = logging.getLogger("api")
@@ -56,8 +56,15 @@ KNOWN_COLS = ["subdomain", "domain", "host", "hostname", "url", "target", "asset
 async def lifespan(app: FastAPI):
     db.init_db()
     scheduler.start()
+    # Telegram listener: chỉ bật khi TELEGRAM_LISTEN=1 (VPS production).
+    # Chỉ 1 instance được chạy — getUpdates conflict nếu nhiều nơi cùng poll.
+    import os
+    if os.getenv("TELEGRAM_LISTEN", "0") == "1" and telegram.configured():
+        telegram_listener.start()
+        log.info("telegram listener: ON")
     yield
     scheduler.shutdown()
+    telegram_listener.stop()
 
 
 app = FastAPI(title="TechAsset Discovery API", version=config.APP_VERSION, lifespan=lifespan)
@@ -83,6 +90,17 @@ async def auth_middleware(request: Request, call_next):
 
 
 security.register_login_routes(app)
+
+
+@app.post("/api/telegram/simulate")
+async def telegram_simulate(payload: dict = Body(...)):
+    """Mô phỏng tin CVE từ nhóm để test AGI pipeline (cần X-API-Key/session)."""
+    text = payload.get("text") or ""
+    chat_id = str(payload.get("chatId") or config.TELEGRAM_CHAT_ID or "")
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    result = await asyncio.to_thread(telegram_listener.handle_text, text, chat_id)
+    return {"success": True, "result": result}
 
 
 def require_push_auth(x_api_key: str | None = Header(default=None)) -> None:
