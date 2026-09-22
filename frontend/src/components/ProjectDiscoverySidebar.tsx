@@ -95,21 +95,6 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
   const teamDropdownRef = useRef<HTMLDivElement>(null);
   const createDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Đóng dropdown khi bấm ra ngoài
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (teamDropdownOpen && teamDropdownRef.current && !teamDropdownRef.current.contains(t)) {
-        setTeamDropdownOpen(false);
-      }
-      if (createDropdownOpen && createDropdownRef.current && !createDropdownRef.current.contains(t)) {
-        setCreateDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [teamDropdownOpen, createDropdownOpen]);
-
   const handleNavClick = (section: MainNavSection) => {
     onSelectSection(section);
     if (onCloseMobile) onCloseMobile();
@@ -192,6 +177,9 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
             </button>
 
             {teamDropdownOpen && (
+              <div className="fixed inset-0 z-30" onClick={() => setTeamDropdownOpen(false)} />
+            )}
+            {teamDropdownOpen && (
               <div className="absolute left-0 right-0 top-full mt-1 bg-white dark:bg-[#141828] border border-slate-200 dark:border-[#262c44] rounded-lg shadow-2xl p-1.5 z-40 text-xs">
                 <div className="px-2 py-1 text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase">Workspaces</div>
                 {workspaces.map((w) => (
@@ -246,6 +234,9 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
             {isOpen && <ChevronDown className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />}
           </button>
 
+          {createDropdownOpen && (
+            <div className="fixed inset-0 z-30" onClick={() => setCreateDropdownOpen(false)} />
+          )}
           {createDropdownOpen && (
             <div className="absolute left-0 top-full mt-1.5 w-60 bg-white dark:bg-[#121626] border border-slate-200 dark:border-[#262d47] rounded-xl shadow-2xl p-1.5 z-50 text-xs animate-in fade-in-50 duration-150">
               <button
