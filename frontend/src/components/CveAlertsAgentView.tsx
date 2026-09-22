@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   ShieldAlert,
   Bot,
@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   BellRing,
   HelpCircle,
+  ChevronDown,
 } from 'lucide-react';
 import { CveMatchAlert, CveItem, ScanResult } from '../types';
 
@@ -74,6 +75,43 @@ export const CveAlertsAgentView: React.FC<CveAlertsAgentViewProps> = ({
 
     return matchesSearch && matchesSeverity && matchesStatus;
   });
+
+  // Gom alert theo CVE: 1 CVE = 1 hàng, bấm mới xổ các asset dính
+  const [expandedCves, setExpandedCves] = useState<Set<string>>(new Set());
+  const groupedAlerts = useMemo(() => {
+    const map = new Map<string, typeof filteredAlerts>();
+    for (const a of filteredAlerts) {
+      const arr = map.get(a.cveId) || [];
+      arr.push(a);
+      map.set(a.cveId, arr);
+    }
+    const sevOrder: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+    return [...map.entries()]
+      .map(([cveId, cveAlerts]) => ({
+        cveId,
+        alerts: cveAlerts.sort((x, y) => (x.assetHost || '').localeCompare(y.assetHost || '')),
+        severity: cveAlerts[0].severity,
+        cvssScore: cveAlerts[0].cvssScore,
+        title: cveAlerts[0].cveTitle,
+        software: cveAlerts[0].software,
+        affectedVersions: cveAlerts[0].affectedVersions,
+        remediation: cveAlerts[0].remediation,
+      }))
+      .sort((a, b) =>
+        (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9) ||
+        b.alerts.length - a.alerts.length ||
+        a.cveId.localeCompare(b.cveId),
+      );
+  }, [filteredAlerts]);
+
+  const toggleCve = (cveId: string) => {
+    setExpandedCves((prev) => {
+      const next = new Set(prev);
+      if (next.has(cveId)) next.delete(cveId);
+      else next.add(cveId);
+      return next;
+    });
+  };
 
   const criticalCount = alerts.filter((a) => a.severity === 'CRITICAL' && a.status !== 'resolved').length;
   const highCount = alerts.filter((a) => a.severity === 'HIGH' && a.status !== 'resolved').length;
@@ -292,128 +330,111 @@ export const CveAlertsAgentView: React.FC<CveAlertsAgentViewProps> = ({
           </div>
         ) : (
           <div className="divide-y divide-slate-100 dark:divide-[#171d2e]">
-            {filteredAlerts.map((alert) => {
-              const matchedAsset = assets.find((a) => a.id === alert.matchedAssetId || a.host === alert.assetHost);
+            {groupedAlerts.map((group) => {
+              const isExpanded = expandedCves.has(group.cveId);
+              const activeCount = group.alerts.filter((a) => a.status === 'active').length;
+              const resolvedCount = group.alerts.filter((a) => a.status === 'resolved').length;
 
               return (
-                <div
-                  key={alert.id}
-                  className="p-4 hover:bg-slate-50 dark:hover:bg-[#111624] transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4"
-                >
-                  {/* Left Column: CVE & Severity */}
-                  <div className="space-y-2 flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {getSeverityBadge(alert.severity, alert.cvssScore)}
-                      <span className="font-mono text-sm font-bold text-slate-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors">
-                        {alert.cveId}
-                      </span>
-                      {onAiAnalyze && (
-                        <button
-                          type="button"
-                          disabled={aiAnalyzingId === alert.id}
-                          onClick={async () => {
-                            const answer = await onAiAnalyze(alert.id);
-                            if (answer) setAiResult({ alertId: alert.id, answer });
-                          }}
-                          className="text-[10px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-500/10 dark:text-violet-300 dark:border-violet-500/30 hover:bg-violet-100 dark:hover:bg-violet-500/20 transition font-semibold cursor-pointer disabled:opacity-50"
-                          title="Phân tích CVE này bằng AI"
-                        >
-                          {aiAnalyzingId === alert.id ? '🤖 ...' : '🤖 AI'}
-                        </button>
+                <div key={group.cveId} className="bg-white dark:bg-[#0d101a]">
+                  {/* CVE Header — bấm để xổ asset dính */}
+                  <button
+                    type="button"
+                    onClick={() => toggleCve(group.cveId)}
+                    className="w-full px-4 py-3.5 flex flex-wrap items-center gap-2.5 hover:bg-slate-50 dark:hover:bg-[#111624] transition-colors cursor-pointer text-left"
+                  >
+                    {getSeverityBadge(group.severity, group.cvssScore)}
+                    <span className="font-mono text-sm font-bold text-slate-900 dark:text-white">{group.cveId}</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[300px]" title={group.title}>
+                      {group.title}
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-[#1a2033] text-slate-600 dark:text-slate-300 font-mono">
+                      {group.software} {group.affectedVersions}
+                    </span>
+
+                    <span className="ml-auto flex items-center gap-2 shrink-0">
+                      {activeCount > 0 && (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-500/10 dark:text-rose-300 dark:border-rose-500/30 font-semibold">
+                          {activeCount} chưa xử lý
+                        </span>
                       )}
-                      <span className="text-xs text-slate-400 font-medium">|</span>
-                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                        Phần mềm: <span className="text-amber-600 dark:text-amber-300 font-mono">{alert.software}</span>
+                      <span className="text-[11px] px-2.5 py-1 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-300 dark:border-indigo-500/30 font-bold">
+                        {group.alerts.length} assets
                       </span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-500/10 dark:text-rose-300 dark:border-rose-500/20 font-mono">
-                        Dải ảnh hưởng: {alert.affectedVersions}
-                      </span>
-                    </div>
+                      <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                    </span>
+                  </button>
 
-                    <div className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-normal">
-                      {alert.cveTitle}
-                    </div>
-
-                    {aiResult?.alertId === alert.id && (
-                      <div className="mt-2 rounded-lg border border-violet-200 dark:border-violet-500/30 bg-violet-50/60 dark:bg-violet-500/5 p-3 text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap leading-relaxed">
-                        <div className="font-bold text-violet-700 dark:text-violet-300 mb-1.5">🤖 Phân tích AI:</div>
-                        {aiResult.answer}
-                        <button
-                          type="button"
-                          onClick={() => setAiResult(null)}
-                          className="block mt-2 text-[10px] text-slate-400 hover:text-red-500 cursor-pointer"
+                  {/* Danh sách asset dính CVE này */}
+                  {isExpanded && (
+                    <div className="border-t border-slate-100 dark:border-[#171d2e] bg-slate-50/50 dark:bg-[#0a0d16]">
+                      <div className="px-4 py-2 text-[11px] text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-[#171d2e]">
+                        {group.title}
+                      </div>
+                      {group.alerts.map((alert) => (
+                        <div
+                          key={alert.id}
+                          className="px-6 py-2.5 flex flex-wrap items-center gap-2.5 border-b border-slate-100 dark:border-[#141927] last:border-b-0 hover:bg-slate-50 dark:hover:bg-[#10152a] transition-colors"
                         >
-                          × Ẩn
-                        </button>
-                      </div>
-                    )}
+                          <Server className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                          <a
+                            href={alert.assetUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-mono text-xs font-bold text-indigo-600 dark:text-indigo-300 hover:underline"
+                          >
+                            {alert.assetHost}
+                          </a>
+                          {alert.detectedVersion && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-300 font-mono border border-rose-200 dark:border-rose-500/30">
+                              {alert.detectedVersion}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-slate-400 ml-auto flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {new Date(alert.detectedAt).toLocaleString('vi-VN')}
+                          </span>
 
-                    {/* Affected Asset info & Detected Version */}
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 dark:bg-[#161c2e] border border-slate-200 dark:border-[#232b45] text-xs">
-                        <Server className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400 shrink-0" />
-                        <span className="text-slate-500 dark:text-slate-400">Host:</span>
-                        <a
-                          href={alert.assetUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-mono font-bold text-indigo-600 dark:text-indigo-300 hover:underline flex items-center gap-1"
-                        >
-                          {alert.assetHost}
-                          <ArrowUpRight className="w-3 h-3 text-slate-400" />
-                        </a>
-                      </div>
+                          {onAiAnalyze && (
+                            <button
+                              type="button"
+                              disabled={aiAnalyzingId === alert.id}
+                              onClick={async () => {
+                                const answer = await onAiAnalyze(alert.id);
+                                if (answer) setAiResult({ alertId: alert.id, answer });
+                              }}
+                              className="text-[10px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-500/10 dark:text-violet-300 dark:border-violet-500/30 hover:bg-violet-100 dark:hover:bg-violet-500/20 transition font-semibold cursor-pointer disabled:opacity-50"
+                              title="Phân tích asset này bằng AI"
+                            >
+                              {aiAnalyzingId === alert.id ? '🤖 ...' : '🤖 AI'}
+                            </button>
+                          )}
 
-                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-50 border border-rose-200 dark:bg-rose-950/40 dark:border-rose-800/40 text-xs">
-                        <span className="w-2 h-2 rounded-full bg-rose-500 dark:bg-rose-400" />
-                        <span className="text-rose-700 dark:text-rose-200">Phiên bản phát hiện:</span>
-                        <span className="font-mono font-bold text-rose-800 dark:text-rose-300">{alert.detectedVersion}</span>
-                      </div>
-
-                      <span className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-slate-400" />
-                        Phát hiện lúc {new Date(alert.detectedAt).toLocaleTimeString('vi-VN')} {new Date(alert.detectedAt).toLocaleDateString('vi-VN')}
-                      </span>
+                          <select
+                            value={alert.status}
+                            onChange={(e) => onUpdateAlertStatus(alert.id, e.target.value as any)}
+                            className={`text-[11px] font-semibold px-2 py-1 rounded-md border focus:outline-none cursor-pointer ${
+                              alert.status === 'active'
+                                ? 'bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-500/20 dark:border-rose-500/40 dark:text-rose-300'
+                                : alert.status === 'investigating'
+                                ? 'bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-500/20 dark:border-amber-500/40 dark:text-amber-300'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-500/20 dark:border-emerald-500/40 dark:text-emerald-300'
+                            }`}
+                          >
+                            <option value="active">Chưa xử lý</option>
+                            <option value="investigating">Đang điều tra</option>
+                            <option value="resolved">Đã khắc phục</option>
+                          </select>
+                        </div>
+                      ))}
+                      {aiResult && group.alerts.some((a) => a.id === aiResult.alertId) && (
+                        <div className="mx-4 my-2 rounded-lg border border-violet-200 dark:border-violet-500/30 bg-violet-50/60 dark:bg-violet-500/5 p-3 text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap leading-relaxed">
+                          <div className="font-bold text-violet-700 dark:text-violet-300 mb-1.5">🤖 Phân tích AI:</div>
+                          {aiResult.answer}
+                        </div>
+                      )}
                     </div>
-
-                    {/* Remediation Note */}
-                    <div className="text-[11px] text-emerald-700 dark:text-emerald-400/90 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/30 rounded-lg px-3 py-1.5 flex items-start gap-2">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
-                      <span><strong>Khắc phục:</strong> {alert.remediation}</span>
-                    </div>
-                  </div>
-
-                  {/* Right Column: Status & Action Buttons */}
-                  <div className="flex flex-row md:flex-col items-end justify-between gap-3 shrink-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] text-slate-500 dark:text-slate-400">Trạng thái:</span>
-                      <select
-                        value={alert.status}
-                        onChange={(e) => onUpdateAlertStatus(alert.id, e.target.value as any)}
-                        className={`text-xs font-semibold px-2.5 py-1 rounded-md border focus:outline-none cursor-pointer ${
-                          alert.status === 'active'
-                            ? 'bg-rose-50 text-rose-700 border-rose-300 dark:bg-rose-500/20 dark:border-rose-500/40 dark:text-rose-300'
-                            : alert.status === 'investigating'
-                            ? 'bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-500/20 dark:border-amber-500/40 dark:text-amber-300'
-                            : 'bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-500/20 dark:border-emerald-500/40 dark:text-emerald-300'
-                        }`}
-                      >
-                        <option value="active">Chưa xử lý (Active)</option>
-                        <option value="investigating">Đang điều tra (Investigating)</option>
-                        <option value="resolved">Đã khắc phục (Resolved)</option>
-                      </select>
-                    </div>
-
-                    {matchedAsset && (
-                      <button
-                        onClick={() => onSelectAsset(matchedAsset)}
-                        className="px-3 py-1 rounded-md bg-slate-100 hover:bg-slate-200 dark:bg-[#1a2136] dark:hover:bg-[#232c47] text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white border border-slate-300 dark:border-[#2b3656] text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
-                      >
-                        <Server className="w-3 h-3 text-indigo-500 dark:text-indigo-400" />
-                        <span>Xem Tech Asset</span>
-                      </button>
-                    )}
-                  </div>
+                  )}
                 </div>
               );
             })}
