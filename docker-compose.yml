@@ -10,19 +10,24 @@ services:
     container_name: techasset-discovery
     # Dùng network của máy thật: quét ra ngoài đúng source IP/VPN, không bị NAT chặn
     network_mode: host
+    # Toàn bộ cấu hình (Telegram/AI/auth/DB...) từ backend/.env
+    env_file:
+      - ./backend/.env
     # PORT cấu hình qua file .env cạnh docker-compose.yml (mặc định 8000)
     environment:
       PORT: ${PORT:-8000}
       DB_PATH: /app/backend/data/techasset.db
       # TLS: mount certs + set TLS_CERTFILE/TLS_KEYFILE trong .env để bật HTTPS
-      TLS_CERTFILE: ${TLS_CERTFILE:-}
-      TLS_KEYFILE: ${TLS_KEYFILE:-}
-    command: sh -c "ARGS=''; if [ -f "$$TLS_CERTFILE" ]; then ARGS='--ssl-certfile $$TLS_CERTFILE --ssl-keyfile $$TLS_KEYFILE'; fi; uvicorn app.main:app --host 0.0.0.0 --port $${PORT:-8000} $$ARGS"
+      TLS_CERTFILE: ${TLS_CERTFILE:-/app/certs/cert.pem}
+      TLS_KEYFILE: ${TLS_KEYFILE:-/app/certs/privkey.pem}
+    command: sh -c "ARGS=''; if [ -f \"$$TLS_CERTFILE\" ]; then ARGS=\"--ssl-certfile $$TLS_CERTFILE --ssl-keyfile $$TLS_KEYFILE\"; fi; echo \"[start] ARGS=$$ARGS\" >> /app/backend/data/uvicorn.log 2>&1; uvicorn app.main:app --host 0.0.0.0 --port $${PORT:-8000} $$ARGS >> /app/backend/data/uvicorn.log 2>&1"
     volumes:
       # SQLite DB + dữ liệu quét — bền vững qua các lần restart/rebuild
       - ./backend/data:/app/backend/data
       # Dùng nuclei templates đã tải trên máy thật (không cần tải lại trong container)
       - ${HOME}/nuclei-templates:/root/nuclei-templates
+      # TLS certs (self-signed) cho HTTPS
+      - ./certs:/app/certs
       # API keys cho subfinder (provider-config.yaml)
       - ${HOME}/.config/subfinder:/root/.config/subfinder
     # Cấu hình qua biến môi trường (xem backend/.env.example):
