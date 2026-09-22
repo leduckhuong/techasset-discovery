@@ -72,3 +72,7 @@ TLS_KEYFILE = os.getenv("TLS_KEYFILE", "").strip()
 
 # httpx tech-detect enrichment khi quét tech (version chi tiết hơn)
 HTTPX_TECH_DETECT = os.getenv("HTTPX_TECH_DETECT", "1") not in ("0", "false", "no")
+
+# Hàng đợi xử lý tin CVE từ nhóm feed (chống DoS khi burst)
+TELEGRAM_QUEUE_WORKERS = int(os.getenv("TELEGRAM_QUEUE_WORKERS", "2"))
+TELEGRAM_QUEUE_MAXSIZE = int(os.getenv("TELEGRAM_QUEUE_MAXSIZE", "1000"))

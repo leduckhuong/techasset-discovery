@@ -94,13 +94,16 @@ security.register_login_routes(app)
 
 @app.post("/api/telegram/simulate")
 async def telegram_simulate(payload: dict = Body(...)):
-    """Mô phỏng tin CVE từ nhóm để test AGI pipeline (cần X-API-Key/session)."""
+    """Xếp tin CVE vào hàng đợi AGI để test (cần X-API-Key/session)."""
     text = payload.get("text") or ""
-    chat_id = str(payload.get("chatId") or config.TELEGRAM_CHAT_ID or "")
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
-    result = await asyncio.to_thread(telegram_listener.handle_text, text, chat_id)
-    return {"success": True, "result": result}
+    return {"success": True, **telegram_listener.handle_text(text)}
+
+
+@app.get("/api/telegram/status")
+def telegram_status():
+    return telegram_listener.status()
 
 
 def _default_workspace_id(conn) -> str:
