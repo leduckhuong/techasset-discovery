@@ -31,6 +31,8 @@ interface CveAlertsAgentViewProps {
   onRunAgentRecheck?: () => void;
   onRunAgentMatching?: () => void;
   onUpdateAlertStatus: (alertId: string, status: 'active' | 'investigating' | 'resolved') => void;
+  onAiAnalyze?: (alertId: string) => Promise<string>;
+  aiAnalyzingId?: string | null;
   onSelectAsset: (asset: ScanResult) => void;
   isAgentRunning?: boolean;
 }
@@ -47,6 +49,8 @@ export const CveAlertsAgentView: React.FC<CveAlertsAgentViewProps> = ({
   onUpdateAlertStatus,
   onSelectAsset,
   isAgentRunning = false,
+  onAiAnalyze,
+  aiAnalyzingId = null,
 }) => {
   const alerts = rawAlerts || rawCveAlerts || [];
   const handleOpenBot = onOpenBotWebhook || onOpenBotWebhookModal || (() => {});
@@ -54,6 +58,7 @@ export const CveAlertsAgentView: React.FC<CveAlertsAgentViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [severityFilter, setSeverityFilter] = useState<'ALL' | 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'>('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'investigating' | 'resolved'>('ALL');
+  const [aiResult, setAiResult] = useState<{ alertId: string; answer: string } | null>(null);
   const [selectedAlertForModal, setSelectedAlertForModal] = useState<CveMatchAlert | null>(null);
 
   // Filter alerts
@@ -302,6 +307,20 @@ export const CveAlertsAgentView: React.FC<CveAlertsAgentViewProps> = ({
                       <span className="font-mono text-sm font-bold text-slate-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors">
                         {alert.cveId}
                       </span>
+                      {onAiAnalyze && (
+                        <button
+                          type="button"
+                          disabled={aiAnalyzingId === alert.id}
+                          onClick={async () => {
+                            const answer = await onAiAnalyze(alert.id);
+                            if (answer) setAiResult({ alertId: alert.id, answer });
+                          }}
+                          className="text-[10px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 dark:bg-violet-500/10 dark:text-violet-300 dark:border-violet-500/30 hover:bg-violet-100 dark:hover:bg-violet-500/20 transition font-semibold cursor-pointer disabled:opacity-50"
+                          title="Phân tích CVE này bằng AI"
+                        >
+                          {aiAnalyzingId === alert.id ? '🤖 ...' : '🤖 AI'}
+                        </button>
+                      )}
                       <span className="text-xs text-slate-400 font-medium">|</span>
                       <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                         Phần mềm: <span className="text-amber-600 dark:text-amber-300 font-mono">{alert.software}</span>
@@ -314,6 +333,20 @@ export const CveAlertsAgentView: React.FC<CveAlertsAgentViewProps> = ({
                     <div className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-normal">
                       {alert.cveTitle}
                     </div>
+
+                    {aiResult?.alertId === alert.id && (
+                      <div className="mt-2 rounded-lg border border-violet-200 dark:border-violet-500/30 bg-violet-50/60 dark:bg-violet-500/5 p-3 text-xs text-slate-700 dark:text-slate-200 whitespace-pre-wrap leading-relaxed">
+                        <div className="font-bold text-violet-700 dark:text-violet-300 mb-1.5">🤖 Phân tích AI:</div>
+                        {aiResult.answer}
+                        <button
+                          type="button"
+                          onClick={() => setAiResult(null)}
+                          className="block mt-2 text-[10px] text-slate-400 hover:text-red-500 cursor-pointer"
+                        >
+                          × Ẩn
+                        </button>
+                      </div>
+                    )}
 
                     {/* Affected Asset info & Detected Version */}
                     <div className="flex flex-wrap items-center gap-2 pt-1">

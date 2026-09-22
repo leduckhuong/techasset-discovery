@@ -189,6 +189,26 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Phân tích CVE alert bằng AI engine
+  const [aiAnalyzingId, setAiAnalyzingId] = useState<string | null>(null);
+  const handleAiAnalyze = async (alertId: string): Promise<string> => {
+    setAiAnalyzingId(alertId);
+    try {
+      const res = await fetch('/api/ai/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alertId }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'AI lỗi');
+      return data.answer;
+    } catch (err: any) {
+      return `Lỗi AI: ${err?.message || 'không xác định'}`;
+    } finally {
+      setAiAnalyzingId(null);
+    }
+  };
+
   // Bot Webhook Push handler
   const handlePushCve = async (cveData: Partial<CveItem>) => {
     try {
@@ -761,6 +781,8 @@ export default function App() {
                 assets={assets}
                 onOpenBotWebhook={() => setIsBotWebhookOpen(true)}
                 onOpenBotWebhookModal={() => setIsBotWebhookOpen(true)}
+                onAiAnalyze={handleAiAnalyze}
+                aiAnalyzingId={aiAnalyzingId}
                 onRunAgentRecheck={handleRunAgentRecheck}
                 onRunAgentMatching={handleRunAgentRecheck}
                 onUpdateAlertStatus={handleUpdateAlertStatus}

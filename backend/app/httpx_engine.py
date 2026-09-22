@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import shutil
+import subprocess
 import time
 from urllib.parse import urlparse
 
@@ -155,3 +156,51 @@ def build_scan_result(entry: dict, asset_group_id: str | None = None) -> dict | 
         "assetGroupId": asset_group_id,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
     }
+
+
+def tech_detect(url: str) -> list[dict]:
+    """
+    Wappalyzer tech-detect của httpx cho 1 URL (kèm version: "WordPress:6.4.0").
+    Trả về list technologies (name + version) — dùng để làm giàu chi tiết version
+    mà fingerprint header/body cơ bản không bắt được.
+    """
+    binary = shutil.which("httpx")
+    if not binary:
+        return []
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [binary, "-u", url, "-tech-detect", "-json", "-silent", "-nc", "-fr",
+             "-rl", config.NUCLEI_RATE_LIMIT],
+            capture_output=True, text=True, timeout=max(config.NUCLEI_TIMEOUT // 3, 30),
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        log.warning("httpx tech-detect %s lỗi: %s", url, exc)
+        return []
+
+    versions: dict[str, str] = {}
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        for t in obj.get("tech") or []:
+            name, _, ver = str(t).partition(":")
+            name = name.strip()
+            if not name:
+                continue
+            if ver and len(ver) > len(versions.get(name, "")):
+                versions[name] = ver[:32]
+
+    result = []
+    for name, ver in versions.items():
+        item = {"name": name, "category": "Technology", "color": HTTPX_COLOR, "source": "httpx"}
+        if ver:
+            item["version"] = ver
+        result.append(item)
+    if result:
+        log.info("httpx tech-detect %s -> %d techs | %.1fs", url, len(result), time.monotonic() - started)
+    return result

@@ -223,10 +223,8 @@ def scan_target(raw_url: str, timeout_sec: float | None = None,
         if tech_detect:
             result["technologies"] = detect_technologies(headers_map, body)
 
-            # Enrichment bằng nuclei (-tags tech,discovery): thêm tech mà
-            # fingerprint cơ bản không bắt được + điền version còn thiếu
-            if use_nuclei:
-                for entry in run_nuclei_tech(target_url):
+            def merge_techs(entries: list[dict], source: str) -> None:
+                for entry in entries:
                     existing = next(
                         (t for t in result["technologies"]
                          if t["name"].lower() == entry["name"].lower()),
@@ -236,7 +234,18 @@ def scan_target(raw_url: str, timeout_sec: float | None = None,
                         result["technologies"].append(entry)
                     elif not existing.get("version") and entry.get("version"):
                         existing["version"] = entry["version"]
-                        existing.setdefault("source", "nuclei")
+                        existing.setdefault("source", source)
+
+            # Enrichment wappalyzer của httpx — version chi tiết hơn (WordPress:6.4.0...)
+            if config.HTTPX_TECH_DETECT:
+                from . import httpx_engine
+                if httpx_engine.httpx_available():
+                    merge_techs(httpx_engine.tech_detect(target_url), "httpx")
+
+            # Enrichment bằng nuclei (-tags tech,discovery): thêm tech mà
+            # fingerprint cơ bản không bắt được + điền version còn thiếu
+            if use_nuclei:
+                merge_techs(run_nuclei_tech(target_url), "nuclei")
     except httpx.TimeoutException:
         result["responseTimeMs"] = int((time.monotonic() - started) * 1000)
         result["statusText"] = "Timeout"

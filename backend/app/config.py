@@ -45,3 +45,27 @@ APP_VERSION = "2.0.0"
 
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# Telegram bot (đẩy CVE alerts vào nhóm)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+# AI engine (OpenAI-compatible endpoint)
+AI_API_BASE = os.getenv("AI_API_BASE", "").strip().rstrip("/")
+AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
+AI_MODEL = os.getenv("AI_MODEL", "").strip()
+AI_TIMEOUT = int(os.getenv("AI_TIMEOUT", "300"))
+
+# Bảo mật: login (basic + TOTP 2FA). Bỏ trống ADMIN_PASSWORD = tắt bảo mật
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin").strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
+TOTP_SECRET = os.getenv("TOTP_SECRET", "").strip()
+SESSION_SECRET = os.getenv("SESSION_SECRET", "ta-dev-secret-change-me")
+SESSION_HOURS = int(os.getenv("SESSION_HOURS", "12"))
+
+# TLS (đường dẫn cert/key trong container; bỏ trống = chỉ HTTP)
+TLS_CERTFILE = os.getenv("TLS_CERTFILE", "").strip()
+TLS_KEYFILE = os.getenv("TLS_KEYFILE", "").strip()
+
+# httpx tech-detect enrichment khi quét tech (version chi tiết hơn)
+HTTPX_TECH_DETECT = os.getenv("HTTPX_TECH_DETECT", "1") not in ("0", "false", "no")

@@ -6,6 +6,7 @@ Quét tech stack theo subdomain/URL + nhận CVE từ bot ngoài + cảnh báo a
 Contract API khớp 100% với frontend (src/types.ts + các fetch() trong App.tsx)
 và webhook /api/cve/push cho con bot đẩy CVE.
 """
+import asyncio
 import logging
 import re
 import shutil
@@ -13,10 +14,10 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import Body, FastAPI, Header, HTTPException, Query
+from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import config, csv_template, cve_engine, db, discovery, httpx_engine, import_pipeline, inventory, logs, nuclei_engine, scheduler, scanner
+from . import ai, config, csv_template, cve_engine, db, discovery, httpx_engine, import_pipeline, inventory, logs, nuclei_engine, scheduler, scanner, security, telegram
 
 logs.setup_logging()
 log = logging.getLogger("api")
@@ -66,6 +67,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Login (user + password + TOTP 2FA) bảo vệ toàn bộ app.
+    Bot/API ngoài đi qua header X-API-Key. /api/health và /login miễn."""
+    if security.enabled() and not security.request_authorized(request):
+        if request.url.path.startswith("/api/"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": "Unauthorized — đăng nhập hoặc gửi X-API-Key"}, status_code=401)
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse("/login", status_code=303)
+    return await call_next(request)
+
+
+security.register_login_routes(app)
 
 
 def require_push_auth(x_api_key: str | None = Header(default=None)) -> None:
@@ -471,7 +488,9 @@ async def push_cve(payload: dict = Body(...), x_api_key: str | None = Header(def
                     f"software (e.g. Apache), affectedVersions (e.g. < 2.4.56) — thiếu: {', '.join(missing)}"),
         )
     with db.get_conn() as conn:
-        return cve_engine.push_cve(conn, payload)
+        result = cve_engine.push_cve(conn, payload)
+        result["telegramSent"] = getattr(cve_engine.run_agent, "last_new_count", 0)
+    return result
 
 
 @app.get("/api/cve/alerts")
@@ -630,6 +649,31 @@ async def discover_subdomains(payload: dict = Body(...)):
         "total": len(subdomains),
         "subdomains": sorted(subdomains),
     }
+
+
+# ============================== Telegram & AI ==============================
+
+@app.post("/api/telegram/test")
+async def telegram_test():
+    ok, detail = await asyncio.to_thread(
+        telegram.send_message,
+        "✅ <b>TechAsset Discovery</b> đã kết nối Telegram bot thành công.\nCVE alerts sẽ được đẩy vào nhóm này.",
+    )
+    return {"success": ok, "detail": detail}
+
+
+@app.post("/api/ai/analyze")
+async def ai_analyze(payload: dict = Body(...)):
+    alert_id = payload.get("alertId")
+    if not alert_id:
+        raise HTTPException(status_code=400, detail="alertId is required")
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM cve_alerts WHERE id = ?", (alert_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    alert = db.alert_row_to_dict(row)
+    ok, answer = await ai.chat(ai.SYSTEM_PROMPT, ai.build_cve_prompt(alert))
+    return {"success": ok, "answer": answer if ok else None, "error": None if ok else answer}
 
 
 # ============================== Import pipeline (chạy nền trên server) ==============================

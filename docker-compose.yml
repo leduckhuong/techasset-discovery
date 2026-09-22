@@ -14,7 +14,10 @@ services:
     environment:
       PORT: ${PORT:-8000}
       DB_PATH: /app/backend/data/techasset.db
-    command: sh -c "uvicorn app.main:app --host 0.0.0.0 --port $${PORT:-8000}"
+      # TLS: mount certs + set TLS_CERTFILE/TLS_KEYFILE trong .env để bật HTTPS
+      TLS_CERTFILE: ${TLS_CERTFILE:-}
+      TLS_KEYFILE: ${TLS_KEYFILE:-}
+    command: sh -c "ARGS=''; if [ -f "$$TLS_CERTFILE" ]; then ARGS='--ssl-certfile $$TLS_CERTFILE --ssl-keyfile $$TLS_KEYFILE'; fi; uvicorn app.main:app --host 0.0.0.0 --port $${PORT:-8000} $$ARGS"
     volumes:
       # SQLite DB + dữ liệu quét — bền vững qua các lần restart/rebuild
       - ./backend/data:/app/backend/data

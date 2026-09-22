@@ -91,14 +91,14 @@ def run_agent(conn) -> list[dict]:
         for row in conn.execute("SELECT * FROM cve_alerts").fetchall()
     }
     fresh: dict[tuple[str, str], dict] = {}
-    new_count = 0
+    new_alert_objs: list[dict] = []
 
     for cve in cves:
         for asset in assets:
             alert = match_cve_against_asset(cve, asset)
             if alert:
                 if (alert["cveId"], alert["matchedAssetId"]) not in existing:
-                    new_count += 1
+                    new_alert_objs.append(alert)
                 fresh[(alert["cveId"], alert["matchedAssetId"])] = alert
 
     conn.execute("DELETE FROM cve_alerts")
@@ -123,8 +123,22 @@ def run_agent(conn) -> list[dict]:
                 alert["detectedAt"], alert["status"],
             ),
         )
+    new_count = len(new_alert_objs)
     log.info("cve-agent: assets=%d cves=%d -> alerts=%d (mới: %d)", len(assets), len(cves), len(rows), new_count)
-    return rows
+
+    # Đẩy Telegram chỉ cho alert MỚI (trung tâm — mọi nguồn: import/scan/push đều tự đẩy)
+    if new_alert_objs:
+        from . import telegram
+        if telegram.configured():
+            sent = 0
+            for alert in new_alert_objs[:10]:
+                if telegram.format_and_send(alert):
+                    sent += 1
+            if sent:
+                log.info("telegram: đã đẩy %d/%d alert mới vào nhóm", sent, len(new_alert_objs))
+
+    run_agent.last_new_count = len(new_alert_objs)
+    return rows, new_count
 
 
 def push_cve(conn, payload: dict) -> dict:
@@ -166,7 +180,7 @@ def push_cve(conn, payload: dict) -> dict:
         ),
     )
 
-    alerts = run_agent(conn)
+    alerts, _ = run_agent(conn)
     matched = [a for a in alerts if a["cveId"] == cve_id]
     return {
         "success": True,
