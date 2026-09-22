@@ -92,7 +92,6 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
 }) => {
   const [createDropdownOpen, setCreateDropdownOpen] = useState(false);
   const [teamDropdownOpen, setTeamDropdownOpen] = useState(false);
-  const [newWorkspaceName, setNewWorkspaceName] = useState('');
 
   const handleNavClick = (section: MainNavSection) => {
     onSelectSection(section);
@@ -193,33 +192,19 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
                   </button>
                 ))}
                 <div className="border-t border-slate-200 dark:border-[#262c44] mt-1 pt-1.5">
-                  <input
-                    type="text"
-                    placeholder="Tên workspace mới..."
-                    value={newWorkspaceName}
-                    onChange={(e) => setNewWorkspaceName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && newWorkspaceName.trim()) {
-                        onCreateWorkspace(newWorkspaceName.trim());
-                        setNewWorkspaceName('');
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const name = window.prompt('Tên workspace mới:', `Workspace ${workspaces.length + 1}`);
+                      if (name && name.trim()) {
+                        onCreateWorkspace(name.trim());
                         setTeamDropdownOpen(false);
                       }
                     }}
-                    className="w-full px-2 py-1.5 rounded bg-slate-50 dark:bg-[#0d1120] border border-slate-200 dark:border-[#262c44] text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500 text-[11px]"
-                  />
-                  {newWorkspaceName.trim() && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onCreateWorkspace(newWorkspaceName.trim());
-                        setNewWorkspaceName('');
-                        setTeamDropdownOpen(false);
-                      }}
-                      className="w-full mt-1 p-1.5 rounded bg-indigo-600 text-white text-[11px] font-semibold hover:bg-indigo-500 transition cursor-pointer"
-                    >
-                      + Tạo Workspace
-                    </button>
-                  )}
+                    className="w-full text-left p-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 cursor-pointer text-[11px]"
+                  >
+                    + Thêm mới workspace
+                  </button>
                 </div>
               </div>
             )}
