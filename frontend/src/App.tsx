@@ -645,10 +645,8 @@ export default function App() {
   const currentAssetGroup =
     assetGroups.find((g) => g.id === selectedGroupId) || assetGroups[0];
 
-  // Assets belonging to currently active group (or all if inventory)
-  const groupAssets = assets.filter(
-    (a) => !a.assetGroupId || a.assetGroupId === selectedGroupId || currentSection === 'inventory'
-  );
+  // Assets thuộc đúng group đang mở (chỉ asset được gán vào group này)
+  const groupAssets = assets.filter((a) => a.assetGroupId === selectedGroupId);
 
   return (
     <div className="flex h-screen bg-slate-100 dark:bg-[#07090e] text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors duration-200">
