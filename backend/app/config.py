@@ -46,9 +46,12 @@ APP_VERSION = "2.0.0"
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
-# Telegram bot (đẩy CVE alerts vào nhóm)
+# Telegram bot
+# TELEGRAM_CHAT_ID  = nhóm FEED chứa tin CVE (listener chỉ ĐỌC, không gửi vào)
+# TELEGRAM_REPORT_CHAT_ID = nhóm NHẬN kết quả phân tích (mặc định fallback = TELEGRAM_CHAT_ID)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_REPORT_CHAT_ID = os.getenv("TELEGRAM_REPORT_CHAT_ID", "").strip()
 
 # AI engine (OpenAI-compatible endpoint)
 AI_API_BASE = os.getenv("AI_API_BASE", "").strip().rstrip("/")

@@ -17,7 +17,7 @@ def configured() -> bool:
 
 
 def send_message(text: str, chat_id: str | None = None) -> tuple[bool, str]:
-    """Gửi tin nhắn HTML vào nhóm. Trả về (ok, detail)."""
+    """Gửi tin nhắn HTML vào nhóm NHẬN KẾT QUẢ (không bao giờ gửi vào nhóm feed)."""
     if not configured():
         return False, "TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID chưa cấu hình"
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -27,7 +27,7 @@ def send_message(text: str, chat_id: str | None = None) -> tuple[bool, str]:
             resp = httpx.post(
                 url,
                 json={
-                    "chat_id": chat_id or config.TELEGRAM_CHAT_ID,
+                    "chat_id": chat_id or config.TELEGRAM_REPORT_CHAT_ID or config.TELEGRAM_CHAT_ID,
                     "text": text,
                     "parse_mode": "HTML",
                     "disable_web_page_preview": True,

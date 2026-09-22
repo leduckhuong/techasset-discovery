@@ -176,7 +176,15 @@ def send_report(info: dict, total_assets: int, affected: list, new_count: int) -
 def _loop() -> None:
     global _offset
     api = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}"
-    log.info("long-polling getUpdates khởi động")
+    # id của bot mình — bỏ qua tin do bot tự gửi (tin từ feed bot khác vẫn xử lý)
+    own_bot_id = None
+    try:
+        me = httpx.get(f"{api}/getMe", timeout=15).json()
+        own_bot_id = (me.get("result") or {}).get("id")
+        log.info("bot id: %s", own_bot_id)
+    except Exception as exc:
+        log.warning("getMe lỗi: %s", exc)
+    log.info("long-polling getUpdates khởi động (đọc nhóm feed %s)", config.TELEGRAM_CHAT_ID)
     while _running:
         try:
             resp = httpx.get(
@@ -195,7 +203,8 @@ def _loop() -> None:
                 chat_id = str((msg.get("chat") or {}).get("id", ""))
                 if chat_id != str(config.TELEGRAM_CHAT_ID):
                     continue
-                if (msg.get("from") or {}).get("is_bot"):
+                sender_id = (msg.get("from") or {}).get("id")
+                if own_bot_id and sender_id == own_bot_id:
                     continue
                 text = msg.get("text") or msg.get("caption") or ""
                 if not text:
