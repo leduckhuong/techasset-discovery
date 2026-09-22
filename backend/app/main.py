@@ -330,6 +330,31 @@ def delete_asset(asset_id: str):
     return {"success": True, "remaining": remaining}
 
 
+# ============================== Group Tech Scan (chạy nền) ==============================
+
+@app.post("/api/groups/{group_id}/scan")
+def scan_group(group_id: str, payload: dict = Body(default={})):
+    """Quét tech toàn bộ subdomain của group (song song, chạy nền server)."""
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM asset_groups WHERE id=?", (group_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Asset group not found")
+        subs = db.loads(row["subdomains_json"], []) or []
+
+    if not subs:
+        return {"success": True, "jobId": None, "total": 0,
+                "message": "Group chưa có subdomain — dùng Tìm Subdomain trước"}
+
+    cfg = {
+        "nuclei": bool(payload.get("nuclei")),
+    }
+    timeout_sec = int(payload.get("timeoutSec") or config.SCAN_DEFAULT_TIMEOUT)
+    job_id = import_pipeline.start_group_scan(
+        group_id, subs, cfg, timeout_sec, workspace_id=row["workspace_id"],
+    )
+    return {"success": True, "jobId": job_id, "total": len(subs)}
+
+
 # ============================== Admin Settings (cấu hình env) ==============================
 
 # Các biến admin được sửa qua UI — áp dụng NGAY (hot)

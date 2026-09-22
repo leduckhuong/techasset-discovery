@@ -477,6 +477,56 @@ export default function App() {
     }
   };
 
+  // Quét tech toàn bộ subdomain của group — chạy nền trên server
+  const [groupScan, setGroupScan] = useState<{ groupId: string; phase: string; progress: number } | null>(null);
+  const handleScanGroupTech = async (groupId: string, nuclei: boolean) => {
+    const grp = assetGroups.find((g) => g.id === groupId);
+    if (!grp || groupScan) return;
+    if (grp.subdomains.length === 0) {
+      showToast(`Group ${grp.name} chưa có subdomain — bấm "Tìm Subdomain" trước`);
+      return;
+    }
+    setGroupScan({ groupId, phase: 'Khởi động...', progress: 0 });
+    try {
+      const res = await fetch(`/api/groups/${groupId}/scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nuclei, timeoutSec: scanOptions.timeoutSec }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const d0 = await res.json();
+      if (!d0.jobId) {
+        showToast(d0.message || 'Group chưa có subdomain để quét');
+        return;
+      }
+      const jobId = d0.jobId;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const jr = await fetch(`/api/import-jobs/${jobId}`);
+        if (!jr.ok) throw new Error('mất kết nối job');
+        const job = await jr.json();
+        setGroupScan({ groupId, phase: job.phase || '', progress: job.progress || 0 });
+        if (job.status === 'done' || job.status === 'error') {
+          // refetch assets + groups của workspace
+          const [aRes] = await Promise.all([fetch(`/api/assets?workspace=${currentWorkspaceId}`)]);
+          const aData = await aRes.json();
+          if (Array.isArray(aData.assets)) {
+            setAssets(aData.assets);
+            setScanLog([...aData.assets].reverse());
+          }
+          showToast(job.status === 'done'
+            ? `Quét group ${grp.name} xong: ${job.stats?.ok ?? 0}/${job.stats?.total ?? 0} live`
+            : `Quét group lỗi`);
+          break;
+        }
+      }
+    } catch (err: any) {
+      showToast(`Quét group thất bại: ${err?.message || 'lỗi'}`);
+    } finally {
+      setGroupScan(null);
+    }
+  };
+
   // Dò subdomain cho 1 asset group (subfinder / crt.sh) và merge vào group
   const [discoveringGroupId, setDiscoveringGroupId] = useState<string | null>(null);
   const handleDiscoverSubdomains = async (groupId: string, engine: 'subfinder' | 'crtsh') => {
@@ -881,6 +931,9 @@ export default function App() {
                     onDeleteAsset={handleDeleteAsset}
                     onDiscoverSubdomains={(engine) => handleDiscoverSubdomains(currentAssetGroup.id, engine)}
                     discoveringSubs={discoveringGroupId === currentAssetGroup.id}
+                    onScanGroupTech={() => handleScanGroupTech(currentAssetGroup.id, scanOptions.nuclei)}
+                    scanningGroup={groupScan?.groupId === currentAssetGroup.id}
+                    groupScanPhase={groupScan?.phase}
                     onProbePorts={() => handleProbePorts(currentAssetGroup.id)}
                     probingPorts={probingGroupId === currentAssetGroup.id}
                   />

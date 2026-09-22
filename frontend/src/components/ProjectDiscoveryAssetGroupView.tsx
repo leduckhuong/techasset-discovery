@@ -42,6 +42,9 @@ interface ProjectDiscoveryAssetGroupViewProps {
   onDeleteAsset: (id: string) => void;
   onDiscoverSubdomains?: (engine: 'subfinder' | 'crtsh') => void;
   discoveringSubs?: boolean;
+  onScanGroupTech?: () => void;
+  scanningGroup?: boolean;
+  groupScanPhase?: string;
   onProbePorts?: () => void;
   probingPorts?: boolean;
 }
@@ -59,6 +62,9 @@ export const ProjectDiscoveryAssetGroupView: React.FC<ProjectDiscoveryAssetGroup
   onDeleteAsset,
   onDiscoverSubdomains,
   discoveringSubs = false,
+  onScanGroupTech,
+  scanningGroup = false,
+  groupScanPhase = '',
   onProbePorts,
   probingPorts = false,
 }) => {
@@ -313,11 +319,13 @@ export const ProjectDiscoveryAssetGroupView: React.FC<ProjectDiscoveryAssetGroup
 
             <button
               type="button"
-              onClick={() => onStartScan(assetGroup.subdomains.map((s) => `https://${s}`))}
-              className="px-4 py-2 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-black font-semibold text-xs hover:bg-slate-800 dark:hover:bg-slate-200 shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              disabled={scanningGroup || !onScanGroupTech}
+              onClick={() => onScanGroupTech && onScanGroupTech()}
+              title="Quét tech toàn bộ subdomain của group trên server (song song)"
+              className="px-4 py-2 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-black font-semibold text-xs hover:bg-slate-800 dark:hover:bg-slate-200 shadow-xs flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-60"
             >
-              <Radar className="w-3.5 h-3.5" />
-              Quét Tech Stack
+              <Radar className={`w-3.5 h-3.5 ${scanningGroup ? 'animate-spin' : ''}`} />
+              {scanningGroup ? (groupScanPhase || 'Đang quét...') : 'Quét Tech Stack'}
             </button>
 
             <button

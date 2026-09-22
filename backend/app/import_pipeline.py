@@ -234,3 +234,81 @@ def asyncio_run_discover(root: str, engine: str):
 def asyncio_run_probe(hosts: list[str]):
     return asyncio.run(httpx_engine.probe_hosts(hosts))
 
+
+def start_group_scan(group_id: str, subdomains: list[str], cfg: dict,
+                     timeout_sec: int, workspace_id: str | None = None) -> str:
+    """Job quét tech song song cho toàn bộ subdomain của 1 group (chạy nền)."""
+    job_id = f"gscan-{uuid.uuid4().hex[:10]}"
+    job = {
+        "id": job_id,
+        "status": "queued",
+        "phase": "Trong hàng đợi...",
+        "progress": 0,
+        "log": [],
+        "stats": {"total": len(subdomains), "ok": 0, "errors": 0},
+        "summary": None,
+        "error": None,
+        "createdAt": _now(),
+    }
+    with _lock:
+        _jobs[job_id] = job
+        if len(_jobs) > 20:
+            for old in sorted(_jobs, key=lambda k: _jobs[k]["createdAt"])[: len(_jobs) - 20]:
+                if _jobs[old]["status"] in ("done", "error"):
+                    _jobs.pop(old)
+    threading.Thread(
+        target=_run_group_scan,
+        args=(job_id, group_id, subdomains, cfg, timeout_sec, workspace_id),
+        daemon=True,
+    ).start()
+    return job_id
+
+
+def _run_group_scan(job_id: str, group_id: str, subdomains: list[str], cfg: dict,
+                    timeout_sec: int, workspace_id: str | None) -> None:
+    with _lock:
+        job = _jobs[job_id]
+    job["status"] = "running"
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    results: list[dict] = []
+    lock_results = threading.Lock()
+    done_count = [0]
+
+    def scan_one(sub: str) -> None:
+        url = sub if sub.startswith("http") else f"https://{sub}"
+        try:
+            r = scanner.scan_target(
+                url, timeout_sec=timeout_sec, tech_detect=True, follow_redirects=True,
+                asset_group_id=group_id, use_nuclei=bool(cfg.get("nuclei")),
+            )
+            if workspace_id:
+                r["workspaceId"] = workspace_id
+            with lock_results:
+                results.append(r)
+        except Exception as exc:
+            log.warning("group scan %s lỗi: %s", url, exc)
+        with lock_results:
+            done_count[0] += 1
+            _set(job, f"Đang quét {sub} ({done_count[0]}/{len(subdomains)})",
+                 int(95 * done_count[0] / max(len(subdomains), 1)))
+
+    # song song 10 luồng (nuclei tự giới hạn bên trong nếu bật)
+    max_workers = 4 if cfg.get("nuclei") else 10
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        list(pool.map(scan_one, subdomains))
+
+    with db.get_conn() as conn:
+        for r in results:
+            inventory.upsert_asset(conn, r)
+        cve_engine.run_agent(conn)
+
+    ok_count = sum(1 for r in results if r.get("statusCode", 0) > 0)
+    job["stats"] = {"total": len(subdomains), "ok": ok_count, "errors": len(subdomains) - ok_count}
+    job["progress"] = 100
+    job["status"] = "done"
+    job["phase"] = "Hoàn tất"
+    job["summary"] = f"Quét xong {len(subdomains)} sub của group: {ok_count} live, {len(subdomains) - ok_count} không phản hồi"
+    _log(job, f"HOÀN TẤT: {ok_count}/{len(subdomains)} live")
+    log.info("[group-scan %s] done: %d/%d live", job_id[:12], ok_count, len(subdomains))
