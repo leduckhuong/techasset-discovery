@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard,
   ShieldAlert,
@@ -92,6 +92,23 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
 }) => {
   const [createDropdownOpen, setCreateDropdownOpen] = useState(false);
   const [teamDropdownOpen, setTeamDropdownOpen] = useState(false);
+  const teamDropdownRef = useRef<HTMLDivElement>(null);
+  const createDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Đóng dropdown khi bấm ra ngoài
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (teamDropdownOpen && teamDropdownRef.current && !teamDropdownRef.current.contains(t)) {
+        setTeamDropdownOpen(false);
+      }
+      if (createDropdownOpen && createDropdownRef.current && !createDropdownRef.current.contains(t)) {
+        setCreateDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [teamDropdownOpen, createDropdownOpen]);
 
   const handleNavClick = (section: MainNavSection) => {
     onSelectSection(section);
@@ -212,7 +229,7 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
         )}
 
         {/* Primary + Create Dropdown */}
-        <div className="relative mt-3">
+        <div className="relative mt-3" ref={createDropdownRef}>
           <button
             type="button"
             onClick={() => setCreateDropdownOpen(!createDropdownOpen)}
