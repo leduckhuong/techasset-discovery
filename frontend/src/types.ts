@@ -158,3 +158,12 @@ export interface CveMatchAlert {
   detectedAt: string;
   status: 'active' | 'investigating' | 'resolved';
 }
+
+
+/** Workspace — phạm vi làm việc chứa asset groups/assets */
+export interface Workspace {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  createdAt: string;
+}

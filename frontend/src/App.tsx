@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { ProjectDiscoverySidebar, MainNavSection } from './components/ProjectDiscoverySidebar';
+import { AdminSettingsView } from './components/AdminSettingsView';
 import { ProjectDiscoveryAssetGroupView } from './components/ProjectDiscoveryAssetGroupView';
 import { AssetGroupsTableView } from './components/AssetGroupsTableView';
 import { TechAssetDetailView } from './components/TechAssetDetailView';
@@ -116,6 +117,10 @@ export default function App() {
   const [currentScanningHost, setCurrentScanningHost] = useState<string>('');
   // Log append-only cho terminal (tách khỏi assets để không bị reshuffle)
   const [scanLog, setScanLog] = useState<ScanResult[]>([]);
+  const [workspaces, setWorkspaces] = useState<{ id: string; name: string; isDefault: boolean }[]>([]);
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState<string>(
+    localStorage.getItem('pd_workspace') || 'ws-default',
+  );
   const [selectedTechFilter, setSelectedTechFilter] = useState<string | null>(null);
   const [presets, setPresets] = useState<TargetPreset[]>([]);
 
@@ -181,13 +186,51 @@ export default function App() {
             const existingUrls = new Set(data.assets.map((a: any) => a.url));
             return [...data.assets, ...prev.filter((a) => !existingUrls.has(a.url))];
           });
-          // Terminal log: seed scrollback ban đầu (cũ → mới), sau đó chỉ APPEND,
-          // không bao giờ đảo/xáo trộn lại — để giống terminal thật
           setScanLog((prev) => (prev.length > 0 ? prev : [...data.assets].slice().reverse()));
         }
       })
       .catch(() => {});
+
+    fetch('/api/workspaces')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setWorkspaces(data);
+          const saved = localStorage.getItem('pd_workspace');
+          if (!saved || !data.some((w: any) => w.id === saved)) {
+            const def = data.find((w: any) => w.isDefault) || data[0];
+            if (def) setCurrentWorkspaceId(def.id);
+          }
+        }
+      })
+      .catch(() => {});
   }, []);
+
+  // Refetch assets/groups theo workspace đang chọn
+  useEffect(() => {
+    localStorage.setItem('pd_workspace', currentWorkspaceId);
+    let cancelled = false;
+    (async () => {
+      try {
+        const [aRes, gRes] = await Promise.all([
+          fetch(`/api/assets?workspace=${currentWorkspaceId}`),
+          fetch(`/api/asset-groups?workspace=${currentWorkspaceId}`),
+        ]);
+        const aData = await aRes.json();
+        const gData = await gRes.json();
+        if (!cancelled && Array.isArray(aData.assets)) {
+          setAssets(aData.assets);
+          setScanLog([...aData.assets].reverse());
+        }
+        if (!cancelled && Array.isArray(gData)) setAssetGroups(gData);
+      } catch {
+        // giữ dữ liệu cũ nếu lỗi mạng
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspaceId]);
 
   // Phân tích CVE alert bằng AI engine
   const [aiAnalyzingId, setAiAnalyzingId] = useState<string | null>(null);
@@ -657,6 +700,26 @@ export default function App() {
         onCloseMobile={() => setMobileMenuOpen(false)}
         theme={theme}
         onToggleTheme={toggleTheme}
+        workspaces={workspaces}
+        currentWorkspaceId={currentWorkspaceId}
+        onSelectWorkspace={(id) => setCurrentWorkspaceId(id)}
+        onCreateWorkspace={async (name) => {
+          try {
+            const res = await fetch('/api/workspaces', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name }),
+            });
+            if (res.ok) {
+              const w = await res.json();
+              setWorkspaces((prev) => [...prev, w]);
+              setCurrentWorkspaceId(w.id);
+              showToast(`Đã tạo workspace: ${w.name}`);
+            }
+          } catch {
+            showToast('Tạo workspace thất bại');
+          }
+        }}
       />
 
       {/* Main Content Area */}
@@ -984,12 +1047,7 @@ export default function App() {
             )}
 
             {/* Fallback for other tabs */}
-            {currentSection === 'settings' && (
-              <div className="bg-[#121522] border border-[#232736] rounded-xl p-8 text-center text-slate-400">
-                <div className="text-sm font-semibold text-white capitalize">{currentSection} Configuration</div>
-                <div className="text-xs text-slate-500 mt-1">Cấu hình tích hợp Webhooks, Slack/Telegram Alert và API Keys.</div>
-              </div>
-            )}
+            {currentSection === 'settings' && <AdminSettingsView />}
           </div>
         </main>
       </div>

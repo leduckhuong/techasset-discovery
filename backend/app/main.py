@@ -103,6 +103,11 @@ async def telegram_simulate(payload: dict = Body(...)):
     return {"success": True, "result": result}
 
 
+def _default_workspace_id(conn) -> str:
+    row = conn.execute("SELECT id FROM workspaces WHERE is_default = 1").fetchone()
+    return row["id"] if row else "ws-default"
+
+
 def require_push_auth(x_api_key: str | None = Header(default=None)) -> None:
     """Nếu cấu hình CVE_PUSH_API_KEY thì webhook bắt buộc header X-API-Key."""
     if config.CVE_PUSH_API_KEY and x_api_key != config.CVE_PUSH_API_KEY:
@@ -154,6 +159,8 @@ def scan_single(payload: dict = Body(...)):
         asset_group_id=payload.get("assetGroupId"),
         use_nuclei=bool(payload.get("nuclei")),
     )
+    if payload.get("workspaceId"):
+        result["workspaceId"] = payload["workspaceId"]
     if isinstance(payload.get("meta"), dict) and payload["meta"]:
         result["meta"] = payload["meta"]
     with db.get_conn() as conn:
@@ -173,6 +180,10 @@ def scan_bulk(payload: dict = Body(...)):
         tech_detect=opts["tech_detect"], follow_redirects=opts["follow"],
         use_nuclei=opts["nuclei"],
     )
+    workspace_id = payload.get("workspaceId")
+    if workspace_id:
+        for r in results:
+            r["workspaceId"] = workspace_id
     with db.get_conn() as conn:
         for res in results:
             inventory.upsert_asset(conn, res)
@@ -279,9 +290,16 @@ def parse_csv(payload: dict = Body(...)):
 # ============================== Assets ==============================
 
 @app.get("/api/assets")
-def list_assets():
+def list_assets(workspace: str | None = Query(default=None)):
     with db.get_conn() as conn:
-        rows = conn.execute("SELECT * FROM assets ORDER BY timestamp DESC").fetchall()
+        default_id = _default_workspace_id(conn)
+        if workspace:
+            rows = conn.execute(
+                "SELECT * FROM assets WHERE workspace_id = ? OR (workspace_id IS NULL AND ? = ?) ORDER BY timestamp DESC",
+                (workspace, workspace, default_id),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM assets ORDER BY timestamp DESC").fetchall()
         return {"total": len(rows), "assets": [db.asset_row_to_dict(r) for r in rows]}
 
 
@@ -312,12 +330,191 @@ def delete_asset(asset_id: str):
     return {"success": True, "remaining": remaining}
 
 
+# ============================== Admin Settings (cấu hình env) ==============================
+
+# Các biến admin được sửa qua UI — áp dụng NGAY (hot)
+ADMIN_HOT_KEYS = {
+    "TELEGRAM_BOT_TOKEN": "Telegram bot token",
+    "TELEGRAM_CHAT_ID": "Nhóm feed (chỉ đọc tin CVE)",
+    "TELEGRAM_REPORT_CHAT_ID": "Nhóm nhận kết quả AGI",
+    "TELEGRAM_LISTEN": "Telegram listener (0/1)",
+    "AI_API_BASE": "AI API base URL",
+    "AI_API_KEY": "AI API key",
+    "AI_MODEL": "AI model",
+    "AI_TIMEOUT": "AI timeout (giây)",
+    "CVE_PUSH_API_KEY": "API key webhook CVE (bot dùng header X-API-Key)",
+    "NUCLEI_TAGS": "Nuclei tags",
+    "NUCLEI_TIMEOUT": "Nuclei timeout (giây)",
+    "NUCLEI_CONCURRENCY": "Nuclei template concurrency",
+    "NUCLEI_RATE_LIMIT": "Nuclei rate limit",
+    "HTTPX_TECH_DETECT": "httpx tech-detect (0/1)",
+    "HTTPX_THREADS": "httpx threads",
+    "HTTPX_TIMEOUT": "httpx timeout (giây)",
+    "SUBFINDER_TIMEOUT": "subfinder timeout (giây)",
+    "SCAN_DEFAULT_TIMEOUT": "Timeout quét mặc định (giây)",
+    "LOG_LEVEL": "Log level (INFO/DEBUG/WARNING)",
+}
+# Các biến chỉ có hiệu lực sau khi restart container
+ADMIN_RESTART_KEYS = {
+    "ADMIN_USERNAME": "Admin username",
+    "ADMIN_PASSWORD": "Admin password",
+    "TOTP_SECRET": "TOTP secret (2FA)",
+    "SESSION_SECRET": "Session secret",
+    "SESSION_HOURS": "Session hours",
+    "TLS_CERTFILE": "TLS certfile",
+    "TLS_KEYFILE": "TLS keyfile",
+    "PORT": "Port",
+    "DB_PATH": "DB path",
+}
+_SECRET_KEYS = {"TELEGRAM_BOT_TOKEN", "AI_API_KEY", "CVE_PUSH_API_KEY", "ADMIN_PASSWORD", "TOTP_SECRET", "SESSION_SECRET"}
+
+
+def _write_env_file(updates: dict[str, str]) -> None:
+    """Cập nhật backend/.env giữ nguyên thứ tự + comment."""
+    path = config.BASE_DIR / ".env"
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    for key, value in updates.items():
+        found = False
+        for i, line in enumerate(lines):
+            if line.startswith(f"{key}="):
+                lines[i] = f"{key}={value}"
+                found = True
+                break
+        if not found:
+            lines.append(f"{key}={value}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@app.get("/api/admin/settings")
+def get_admin_settings():
+    import os as _os
+
+    def val(key: str, mask: bool):
+        raw = _os.environ.get(key, "")
+        if mask:
+            return {"set": bool(raw), "value": ""}
+        return {"set": bool(raw), "value": raw}
+
+    hot = {k: {"label": label, **val(k, k in _SECRET_KEYS)} for k, label in ADMIN_HOT_KEYS.items()}
+    restart = {k: {"label": label, **val(k, k in _SECRET_KEYS)} for k, label in ADMIN_RESTART_KEYS.items()}
+    return {
+        "authEnabled": security.enabled(),
+        "hot": hot,
+        "restart": restart,
+        "restartNote": "Các key ở mục này chỉ có hiệu lực sau khi restart container (docker compose restart).",
+    }
+
+
+@app.put("/api/admin/settings")
+async def update_admin_settings(payload: dict = Body(...)):
+    values: dict = payload.get("values") or {}
+    unknown = [k for k in values if k not in ADMIN_HOT_KEYS and k not in ADMIN_RESTART_KEYS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown keys: {', '.join(unknown)}")
+
+    import os as _os
+    applied_hot = {}
+    restart_keys = []
+    for key, value in values.items():
+        value = str(value).strip()
+        _write_env_file({key: value})
+        _os.environ[key] = value
+        if key in ADMIN_HOT_KEYS:
+            setattr(config, key, value)
+            applied_hot[key] = value
+        if key in ADMIN_RESTART_KEYS:
+            restart_keys.append(key)
+
+    # telegram listener bật/tắt realtime theo TELEGRAM_LISTEN
+    if "TELEGRAM_LISTEN" in values:
+        if values.get("TELEGRAM_LISTEN") == "1" and telegram.configured():
+            telegram_listener.start()
+        elif values.get("TELEGRAM_LISTEN") != "1":
+            telegram_listener.stop()
+
+    log.info("admin settings cập nhật: %s", ", ".join(values))
+    return {
+        "success": True,
+        "applied": sorted(applied_hot),
+        "restartRequired": sorted(set(restart_keys)),
+    }
+
+
+# ============================== Workspaces ==============================
+
+@app.get("/api/workspaces")
+def list_workspaces():
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM workspaces ORDER BY is_default DESC, created_at ASC"
+        ).fetchall()
+        return [
+            {"id": r["id"], "name": r["name"], "isDefault": bool(r["is_default"]),
+             "createdAt": r["created_at"]}
+            for r in rows
+        ]
+
+
+@app.post("/api/workspaces")
+def create_workspace(payload: dict = Body(...)):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    ws_id = db.new_id("ws")
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT INTO workspaces (id, name, is_default, created_at) VALUES (?,?,0,?)",
+            (ws_id, name, datetime.now(timezone.utc).isoformat()),
+        )
+        row = conn.execute("SELECT * FROM workspaces WHERE id=?", (ws_id,)).fetchone()
+        return {"id": row["id"], "name": row["name"], "isDefault": bool(row["is_default"]),
+                "createdAt": row["created_at"]}
+
+
+@app.patch("/api/workspaces/{ws_id}")
+def rename_workspace(ws_id: str, payload: dict = Body(...)):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    with db.get_conn() as conn:
+        cur = conn.execute("UPDATE workspaces SET name=? WHERE id=?", (name, ws_id))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        row = conn.execute("SELECT * FROM workspaces WHERE id=?", (ws_id,)).fetchone()
+        return {"id": row["id"], "name": row["name"], "isDefault": bool(row["is_default"]),
+                "createdAt": row["created_at"]}
+
+
+@app.delete("/api/workspaces/{ws_id}")
+def delete_workspace(ws_id: str):
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT is_default FROM workspaces WHERE id=?", (ws_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        if row["is_default"]:
+            raise HTTPException(status_code=400, detail="Không thể xóa Default Workspace")
+        default_id = conn.execute("SELECT id FROM workspaces WHERE is_default=1").fetchone()
+        default_id = default_id["id"] if default_id else "ws-default"
+        # chuyển groups/assets về workspace mặc định rồi mới xóa
+        conn.execute("UPDATE asset_groups SET workspace_id=? WHERE workspace_id=?", (default_id, ws_id))
+        conn.execute("UPDATE assets SET workspace_id=? WHERE workspace_id=?", (default_id, ws_id))
+        conn.execute("DELETE FROM workspaces WHERE id=?", (ws_id,))
+    return {"success": True}
+
+
 # ============================== Asset Groups ==============================
 
 @app.get("/api/asset-groups")
-def list_groups():
+def list_groups(workspace: str | None = Query(default=None)):
     with db.get_conn() as conn:
-        rows = conn.execute("SELECT * FROM asset_groups ORDER BY created_at DESC").fetchall()
+        default_id = _default_workspace_id(conn)
+        if workspace:
+            rows = conn.execute(
+                "SELECT * FROM asset_groups WHERE workspace_id = ? OR (workspace_id IS NULL AND ? = ?) ORDER BY created_at DESC",
+                (workspace, workspace, default_id),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM asset_groups ORDER BY created_at DESC").fetchall()
         return [db.group_row_to_dict(r) for r in rows]
 
 
@@ -327,6 +524,7 @@ def create_group(payload: dict = Body(...)):
     root_domain = (payload.get("rootDomain") or "").strip().lower()
     if not name or not root_domain:
         raise HTTPException(status_code=400, detail="Name and rootDomain are required")
+    workspace_id = (payload.get("workspaceId") or "").strip() or None
     group = {
         "id": db.new_id("group"),
         "name": name,
@@ -335,18 +533,22 @@ def create_group(payload: dict = Body(...)):
         "subdomains": payload.get("subdomains") or [],
         "tags": payload.get("tags") or ["Custom Group"],
         "meta": payload.get("meta") or {},
+        "workspaceId": workspace_id,
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "lastScanned": datetime.now(timezone.utc).isoformat(),
     }
     with db.get_conn() as conn:
+        if not workspace_id:
+            workspace_id = _default_workspace_id(conn)
+            group["workspaceId"] = workspace_id
         conn.execute(
             """INSERT INTO asset_groups (id, name, root_domain, description,
-               subdomains_json, tags_json, meta_json, created_at, last_scanned)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               subdomains_json, tags_json, meta_json, workspace_id, created_at, last_scanned)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (group["id"], group["name"], group["rootDomain"], group["description"],
              db.dumps(group["subdomains"]), db.dumps(group["tags"]),
              db.dumps(group["meta"]) if group["meta"] else None,
-             group["createdAt"], group["lastScanned"]),
+             workspace_id, group["createdAt"], group["lastScanned"]),
         )
     return {**group, "assetCount": len(group["subdomains"])}
 
@@ -704,7 +906,10 @@ def start_import_scan(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="items array is required")
     cfg = payload.get("config") or {}
     timeout_sec = int(payload.get("timeoutSec") or config.SCAN_DEFAULT_TIMEOUT)
-    job_id = import_pipeline.start_job(items, cfg, timeout_sec)
+    job_id = import_pipeline.start_job(
+        items, cfg, timeout_sec,
+        workspace_id=payload.get("workspaceId") or payload.get("workspace") or None,
+    )
     log.info("import job %s đăng ký: %d items | cfg=%s", job_id, len(items), cfg)
     return {"success": True, "jobId": job_id}
 

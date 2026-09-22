@@ -44,7 +44,7 @@ def _set(job: dict, phase: str, progress: int) -> None:
     job["progress"] = progress
 
 
-def start_job(items: list[dict], cfg: dict, timeout_sec: int) -> str:
+def start_job(items: list[dict], cfg: dict, timeout_sec: int, workspace_id: str | None = None) -> str:
     job_id = f"imp-{uuid.uuid4().hex[:10]}"
     job = {
         "id": job_id,
@@ -64,11 +64,12 @@ def start_job(items: list[dict], cfg: dict, timeout_sec: int) -> str:
             for old in sorted(_jobs, key=lambda k: _jobs[k]["createdAt"])[: len(_jobs) - 20]:
                 if _jobs[old]["status"] in ("done", "error"):
                     _jobs.pop(old)
-    threading.Thread(target=_run, args=(job_id, items, cfg, timeout_sec), daemon=True).start()
+    threading.Thread(target=_run, args=(job_id, items, cfg, timeout_sec, workspace_id), daemon=True).start()
     return job_id
 
 
-def _upsert_group(conn, root: str, name: str, subdomains: list[str], tags: list[str], meta: dict) -> str:
+def _upsert_group(conn, root: str, name: str, subdomains: list[str], tags: list[str],
+                  meta: dict, workspace_id: str | None = None) -> str:
     row = conn.execute(
         "SELECT id, subdomains_json, meta_json FROM asset_groups WHERE root_domain = ?", (root,)
     ).fetchone()
@@ -81,23 +82,25 @@ def _upsert_group(conn, root: str, name: str, subdomains: list[str], tags: list[
             "UPDATE asset_groups SET subdomains_json=?, meta_json=? WHERE id=?",
             (db.dumps(merged), db.dumps(merged_meta), row["id"]),
         )
+        if workspace_id and not row["workspace_id"]:
+            conn.execute("UPDATE asset_groups SET workspace_id=? WHERE id=?", (workspace_id, row["id"]))
         return row["id"]
     group_id = f"group-{uuid.uuid4().hex[:8]}"
     conn.execute(
         """INSERT INTO asset_groups (id, name, root_domain, description, subdomains_json,
-           tags_json, meta_json, created_at, last_scanned)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+           tags_json, meta_json, workspace_id, created_at, last_scanned)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
         (
             group_id, name, root,
             "Import pipeline — domain list",
             db.dumps(subdomains), db.dumps(tags), db.dumps(meta) if meta else None,
-            _now(), _now(),
+            workspace_id, _now(), _now(),
         ),
     )
     return group_id
 
 
-def _run(job_id: str, items: list[dict], cfg: dict, timeout_sec: int) -> None:
+def _run(job_id: str, items: list[dict], cfg: dict, timeout_sec: int, workspace_id: str | None = None) -> None:
     with _lock:
         job = _jobs[job_id]
     job["status"] = "running"
@@ -129,6 +132,7 @@ def _run(job_id: str, items: list[dict], cfg: dict, timeout_sec: int) -> None:
                 gid = _upsert_group(
                     conn, root, root, info["subdomains"],
                     info["projects"] or ["Imported"], info["meta"],
+                    workspace_id,
                 )
                 groups[root] = {"id": gid, "rootDomain": root, "subdomains": list(info["subdomains"])}
                 stats["groups"] += 1
@@ -178,6 +182,8 @@ def _run(job_id: str, items: list[dict], cfg: dict, timeout_sec: int) -> None:
                 )
                 if it.get("meta"):
                     result["meta"] = it["meta"]
+                if workspace_id:
+                    result["workspaceId"] = workspace_id
                 with db.get_conn() as conn:
                     inventory.upsert_asset(conn, result)
                     cve_engine.run_agent(conn)

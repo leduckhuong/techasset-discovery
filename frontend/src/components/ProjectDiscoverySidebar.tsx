@@ -26,7 +26,7 @@ import {
   Sun,
   Moon,
 } from 'lucide-react';
-import { AssetGroup } from '../types';
+import { AssetGroup, Workspace } from '../types';
 
 export type MainNavSection = 
   | 'dashboard'
@@ -58,6 +58,10 @@ interface ProjectDiscoverySidebarProps {
   isMobileOpen?: boolean;
   onCloseMobile?: () => void;
   theme?: 'dark' | 'light';
+  workspaces?: Workspace[];
+  currentWorkspaceId?: string | null;
+  onSelectWorkspace?: (id: string) => void;
+  onCreateWorkspace?: (name: string) => void;
   onToggleTheme?: () => void;
 }
 
@@ -81,9 +85,14 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
   onCloseMobile,
   theme = 'dark',
   onToggleTheme,
+  workspaces = [],
+  currentWorkspaceId = null,
+  onSelectWorkspace = (_id: string) => {},
+  onCreateWorkspace = (_name: string) => {},
 }) => {
   const [createDropdownOpen, setCreateDropdownOpen] = useState(false);
   const [teamDropdownOpen, setTeamDropdownOpen] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
 
   const handleNavClick = (section: MainNavSection) => {
     onSelectSection(section);
@@ -147,7 +156,7 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
           </div>
         </div>
 
-        {/* Team Selector */}
+        {/* Workspace Selector */}
         {isOpen && (
           <div className="relative mt-3">
             <button
@@ -157,10 +166,10 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
             >
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-6 h-6 rounded bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-[11px] font-bold shrink-0">
-                  L
+                  {(workspaces.find((w) => w.id === currentWorkspaceId)?.name || 'W').slice(0, 1).toUpperCase()}
                 </div>
                 <div className="truncate text-xs font-semibold text-slate-800 dark:text-slate-200">
-                  leduckhuong2002's Team
+                  {workspaces.find((w) => w.id === currentWorkspaceId)?.name || 'Workspace'}
                 </div>
               </div>
               <ChevronDown className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
@@ -168,13 +177,49 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
 
             {teamDropdownOpen && (
               <div className="absolute left-0 right-0 top-full mt-1 bg-white dark:bg-[#141828] border border-slate-200 dark:border-[#262c44] rounded-lg shadow-2xl p-1.5 z-40 text-xs">
-                <div className="px-2 py-1 text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase">Teams & Workspaces</div>
-                <div className="p-2 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 font-medium flex items-center justify-between">
-                  <span>leduckhuong2002's Team</span>
-                  <Check className="w-3.5 h-3.5" />
-                </div>
-                <div className="p-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 cursor-pointer text-[11px]">
-                  + Create New Team...
+                <div className="px-2 py-1 text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase">Workspaces</div>
+                {workspaces.map((w) => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectWorkspace(w.id);
+                      setTeamDropdownOpen(false);
+                    }}
+                    className="w-full text-left p-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer flex items-center justify-between"
+                  >
+                    <span className="truncate">{w.name}</span>
+                    {w.id === currentWorkspaceId && <Check className="w-3.5 h-3.5 text-indigo-500" />}
+                  </button>
+                ))}
+                <div className="border-t border-slate-200 dark:border-[#262c44] mt-1 pt-1.5">
+                  <input
+                    type="text"
+                    placeholder="Tên workspace mới..."
+                    value={newWorkspaceName}
+                    onChange={(e) => setNewWorkspaceName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newWorkspaceName.trim()) {
+                        onCreateWorkspace(newWorkspaceName.trim());
+                        setNewWorkspaceName('');
+                        setTeamDropdownOpen(false);
+                      }
+                    }}
+                    className="w-full px-2 py-1.5 rounded bg-slate-50 dark:bg-[#0d1120] border border-slate-200 dark:border-[#262c44] text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500 text-[11px]"
+                  />
+                  {newWorkspaceName.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCreateWorkspace(newWorkspaceName.trim());
+                        setNewWorkspaceName('');
+                        setTeamDropdownOpen(false);
+                      }}
+                      className="w-full mt-1 p-1.5 rounded bg-indigo-600 text-white text-[11px] font-semibold hover:bg-indigo-500 transition cursor-pointer"
+                    >
+                      + Tạo Workspace
+                    </button>
+                  )}
                 </div>
               </div>
             )}

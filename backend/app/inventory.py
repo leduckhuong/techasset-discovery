@@ -6,8 +6,8 @@ UPSERT_SQL = """
 INSERT INTO assets (id, url, final_url, host, port, scheme, status_code, status_text,
   title, web_server, content_length, content_type, response_time_ms, ip, asn,
   ssl_json, technologies_json, headers_json, chain_json, labels_json,
-  asset_group_id, meta_json, error, timestamp)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  asset_group_id, workspace_id, meta_json, error, timestamp)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(url) DO UPDATE SET
   final_url=excluded.final_url, host=excluded.host, port=excluded.port,
   scheme=excluded.scheme, status_code=excluded.status_code,
@@ -18,6 +18,7 @@ ON CONFLICT(url) DO UPDATE SET
   technologies_json=excluded.technologies_json, headers_json=excluded.headers_json,
   chain_json=excluded.chain_json, labels_json=excluded.labels_json,
   asset_group_id=COALESCE(excluded.asset_group_id, assets.asset_group_id),
+  workspace_id=COALESCE(excluded.workspace_id, assets.workspace_id),
   meta_json=COALESCE(excluded.meta_json, assets.meta_json),
   error=excluded.error, timestamp=excluded.timestamp
 """
@@ -41,6 +42,7 @@ def upsert_asset(conn, result: dict) -> str:
             db.dumps(result["chain"]) if result.get("chain") else None,
             db.dumps(result.get("labels") or []),
             result.get("assetGroupId"),
+            result.get("workspaceId"),
             db.dumps(result["meta"]) if result.get("meta") else None,
             result.get("error"), result.get("timestamp"),
         ),

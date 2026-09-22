@@ -2,6 +2,7 @@
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 import uuid
 from contextlib import contextmanager
 
@@ -41,13 +42,19 @@ CREATE TABLE IF NOT EXISTS assets (
   web_server TEXT, content_length INTEGER, content_type TEXT,
   response_time_ms INTEGER, ip TEXT, asn TEXT,
   ssl_json TEXT, technologies_json TEXT, headers_json TEXT, chain_json TEXT,
-  labels_json TEXT, asset_group_id TEXT, error TEXT,
+  labels_json TEXT, asset_group_id TEXT, workspace_id TEXT, error TEXT,
   timestamp TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workspaces (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  is_default INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS asset_groups (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL, root_domain TEXT NOT NULL, description TEXT,
-  subdomains_json TEXT, tags_json TEXT,
+  subdomains_json TEXT, tags_json TEXT, workspace_id TEXT,
   created_at TEXT NOT NULL, last_scanned TEXT
 );
 CREATE TABLE IF NOT EXISTS cron_jobs (
@@ -81,9 +88,27 @@ CREATE TABLE IF NOT EXISTS cve_alerts (
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
-        # Migration cho DB tạo từ phiên bản cũ: thêm cột meta_json nếu thiếu
+        # Migration cho DB tạo từ phiên bản cũ: thêm cột thiếu
         _ensure_column(conn, "assets", "meta_json", "TEXT")
+        _ensure_column(conn, "assets", "workspace_id", "TEXT")
         _ensure_column(conn, "asset_groups", "meta_json", "TEXT")
+        _ensure_column(conn, "asset_groups", "workspace_id", "TEXT")
+        _ensure_workspace(conn)
+
+
+def _ensure_workspace(conn) -> str:
+    """Đảm bảo có Default Workspace; gán asset/group chưa có workspace về đó."""
+    row = conn.execute("SELECT id FROM workspaces WHERE is_default = 1").fetchone()
+    if row:
+        return row["id"]
+    ws_id = "ws-default"
+    conn.execute(
+        "INSERT OR IGNORE INTO workspaces (id, name, is_default, created_at) VALUES (?,?,1,?)",
+        (ws_id, "Default Workspace", datetime.now(timezone.utc).isoformat()),
+    )
+    conn.execute("UPDATE assets SET workspace_id=? WHERE workspace_id IS NULL", (ws_id,))
+    conn.execute("UPDATE asset_groups SET workspace_id=? WHERE workspace_id IS NULL", (ws_id,))
+    return ws_id
 
 
 def _ensure_column(conn, table: str, column: str, decl: str) -> None:
@@ -136,6 +161,8 @@ def asset_row_to_dict(row: sqlite3.Row) -> dict:
         d["finalUrl"] = row["final_url"]
     if row["asset_group_id"]:
         d["assetGroupId"] = row["asset_group_id"]
+    if row["workspace_id"]:
+        d["workspaceId"] = row["workspace_id"]
     if row["error"]:
         d["error"] = row["error"]
     return d
@@ -186,6 +213,7 @@ def group_row_to_dict(row: sqlite3.Row) -> dict:
         "createdAt": row["created_at"],
         "lastScanned": row["last_scanned"],
         "tags": loads(row["tags_json"], []),
+        "workspaceId": row["workspace_id"],
     }
     meta = loads(row["meta_json"])
     if meta is not None:
