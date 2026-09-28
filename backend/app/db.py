@@ -100,15 +100,87 @@ def _ensure_workspace(conn) -> str:
     """Đảm bảo có Default Workspace; gán asset/group chưa có workspace về đó."""
     row = conn.execute("SELECT id FROM workspaces WHERE is_default = 1").fetchone()
     if row:
-        return row["id"]
-    ws_id = "ws-default"
-    conn.execute(
-        "INSERT OR IGNORE INTO workspaces (id, name, is_default, created_at) VALUES (?,?,1,?)",
-        (ws_id, "Default Workspace", datetime.now(timezone.utc).isoformat()),
-    )
+        ws_id = row["id"]
+    else:
+        ws_id = "ws-default"
+        conn.execute(
+            "INSERT OR IGNORE INTO workspaces (id, name, is_default, created_at) VALUES (?,?,1,?)",
+            (ws_id, "Default Workspace", datetime.now(timezone.utc).isoformat()),
+        )
+    # Backfill LUÔN (không chỉ khi vừa tạo): DB cũ có thể còn asset/group NULL
     conn.execute("UPDATE assets SET workspace_id=? WHERE workspace_id IS NULL", (ws_id,))
     conn.execute("UPDATE asset_groups SET workspace_id=? WHERE workspace_id IS NULL", (ws_id,))
+    _backfill_asset_group_links(conn)
+    _backfill_discovered_assets(conn)
     return ws_id
+
+
+def _backfill_asset_group_links(conn) -> None:
+    """Gán asset_group_id cho asset cũ chưa có group: match host với root_domain
+    của group (host == root hoặc host đuôi .root), ưu tiên group cùng workspace.
+    Idempotent — chỉ touches asset có asset_group_id IS NULL."""
+    groups = conn.execute(
+        "SELECT id, root_domain, workspace_id FROM asset_groups ORDER BY created_at ASC"
+    ).fetchall()
+    if not groups:
+        return
+    assets = conn.execute(
+        "SELECT id, host, workspace_id FROM assets WHERE asset_group_id IS NULL AND host IS NOT NULL"
+    ).fetchall()
+    for a in assets:
+        host = (a["host"] or "").lower().strip()
+        if not host:
+            continue
+        match_same_ws = None
+        match_any = None
+        for g in groups:
+            root = (g["root_domain"] or "").lower().strip()
+            if not root:
+                continue
+            if host == root or host.endswith("." + root):
+                match_any = match_any or g
+                if g["workspace_id"] and g["workspace_id"] == a["workspace_id"]:
+                    match_same_ws = match_same_ws or g
+                    break
+        chosen = match_same_ws or match_any
+        if chosen:
+            conn.execute("UPDATE assets SET asset_group_id=? WHERE id=?", (chosen["id"], a["id"]))
+
+
+def _backfill_discovered_assets(conn) -> int:
+    """Tạo asset 'chưa quét' cho subdomain đã discover nhưng chưa có asset row,
+    để số rows trong group khớp con số services trên card. Idempotent."""
+    import re as _re
+
+    groups = conn.execute(
+        "SELECT id, root_domain, workspace_id, subdomains_json FROM asset_groups"
+    ).fetchall()
+    if not groups:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    host_re = _re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
+    created = 0
+    for g in groups:
+        subs = loads(g["subdomains_json"], []) or []
+        candidates = list(dict.fromkeys([*subs, g["root_domain"]]))
+        for sub in candidates:
+            host = (str(sub) if sub is not None else "").strip().lower().rstrip(".")
+            if not host or "." not in host or not host_re.match(host):
+                continue
+            if conn.execute("SELECT 1 FROM assets WHERE host = ? LIMIT 1", (host,)).fetchone():
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO assets
+                   (id, url, host, scheme, status_code, labels_json,
+                    asset_group_id, workspace_id, timestamp)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (
+                    new_id("asset"), f"https://{host}", host, "https", 0,
+                    dumps(["discovered"]), g["id"], g["workspace_id"], now,
+                ),
+            )
+            created += 1
+    return created
 
 
 def _ensure_column(conn, table: str, column: str, decl: str) -> None:

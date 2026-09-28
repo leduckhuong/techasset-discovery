@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import ai, config, csv_template, cve_engine, db, discovery, httpx_engine, import_pipeline, inventory, logs, nuclei_engine, scheduler, scanner, security, telegram, telegram_listener
+from . import ai, config, csv_template, cve_engine, db, discovery, httpx_engine, import_pipeline, inventory, logs, nuclei_engine, scheduler, scanner, security, telegram, telegram_listener, telegram_user
 
 logs.setup_logging()
 log = logging.getLogger("api")
@@ -62,9 +62,18 @@ async def lifespan(app: FastAPI):
     if os.getenv("TELEGRAM_LISTEN", "0") == "1" and telegram.configured():
         telegram_listener.start()
         log.info("telegram listener: ON")
+    # User session listener (MTProto) — đọc nhóm feed bằng tài khoản user,
+    # nhìn thấy mọi tin nhắn không cần bot admin. Chỉ ĐỌC.
+    if config.TELEGRAM_USER_LISTEN and telegram_user.configured():
+        if telegram_user.load_saved_session():
+            started = telegram_user.start_listener()
+            log.info("telegram user-session listener: %s", "ON" if started.get("ok") else started)
+        else:
+            log.info("telegram user-session: chưa đăng nhập — vào Settings để đăng nhập")
     yield
     scheduler.shutdown()
     telegram_listener.stop()
+    telegram_user.stop_listener()
 
 
 app = FastAPI(title="TechAsset Discovery API", version=config.APP_VERSION, lifespan=lifespan)
@@ -104,6 +113,54 @@ async def telegram_simulate(payload: dict = Body(...)):
 @app.get("/api/telegram/status")
 def telegram_status():
     return telegram_listener.status()
+
+
+# ============================== Telegram user session (MTProto, READ-ONLY) ==============================
+
+@app.get("/api/telegram/user-session/status")
+def user_session_status():
+    return telegram_user.status()
+
+
+@app.post("/api/telegram/user-session/login-start")
+async def user_session_login_start(payload: dict = Body(...)):
+    """Bước 1: gửi mã OTP tới Telegram của user (user tự nhập phone của mình)."""
+    phone = (payload.get("phone") or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="phone is required")
+    return await asyncio.to_thread(telegram_user.login_start, phone)
+
+
+@app.post("/api/telegram/user-session/login-verify")
+async def user_session_login_verify(payload: dict = Body(...)):
+    """Bước 2: xác thực mã OTP (+ password 2FA nếu có) -> lưu session."""
+    code = (payload.get("code") or "").strip()
+    password = (payload.get("password") or "").strip() or None
+    if not code:
+        raise HTTPException(status_code=400, detail="code is required")
+    result = await asyncio.to_thread(telegram_user.login_verify, code, password)
+    if result.get("ok") and config.TELEGRAM_USER_LISTEN:
+        telegram_user.start_listener()
+    return result
+
+
+@app.post("/api/telegram/user-session/logout")
+def user_session_logout():
+    return telegram_user.logout()
+
+
+@app.post("/api/telegram/user-session/backfill")
+async def user_session_backfill(payload: dict = Body(...)):
+    """Quét lịch sử nhóm feed N giờ gần nhất, nhập CVE chưa có (notify=False,
+    không gửi gì ra Telegram)."""
+    hours = int(payload.get("hours") or 24)
+    hours = max(1, min(hours, 24 * 7))
+    return await asyncio.to_thread(telegram_user.start_backfill, hours)
+
+
+@app.get("/api/telegram/user-session/backfill-status")
+def user_session_backfill_status():
+    return telegram_user.backfill_status()
 
 
 def _default_workspace_id(conn) -> str:
@@ -319,9 +376,9 @@ def add_asset(payload: dict = Body(...)):
     }
     with db.get_conn() as conn:
         inventory.upsert_asset(conn, result)
-        alerts = cve_engine.run_agent(conn)
+        rows, _new_count = cve_engine.run_agent(conn)
         total = conn.execute("SELECT COUNT(*) c FROM assets").fetchone()["c"]
-    return {"success": True, "totalAssets": total, "activeAlerts": len(alerts)}
+    return {"success": True, "totalAssets": total, "activeAlerts": len(rows)}
 
 
 @app.delete("/api/assets/{asset_id}")
@@ -443,8 +500,14 @@ async def update_admin_settings(payload: dict = Body(...)):
     import os as _os
     applied_hot = {}
     restart_keys = []
+    kept: list[str] = []
     for key, value in values.items():
         value = str(value).strip()
+        if value == "":
+            # Ô secret được GET mask về "" và key chưa set cũng trả "" — value
+            # rỗng luôn bỏ qua (không xoá key đang có, không ghi dòng rỗng vào .env).
+            kept.append(key)
+            continue
         _write_env_file({key: value})
         _os.environ[key] = value
         if key in ADMIN_HOT_KEYS:
@@ -454,17 +517,18 @@ async def update_admin_settings(payload: dict = Body(...)):
             restart_keys.append(key)
 
     # telegram listener bật/tắt realtime theo TELEGRAM_LISTEN
-    if "TELEGRAM_LISTEN" in values:
+    if "TELEGRAM_LISTEN" in values and "TELEGRAM_LISTEN" not in kept:
         if values.get("TELEGRAM_LISTEN") == "1" and telegram.configured():
             telegram_listener.start()
         elif values.get("TELEGRAM_LISTEN") != "1":
             telegram_listener.stop()
 
-    log.info("admin settings cập nhật: %s", ", ".join(values))
+    log.info("admin settings cập nhật: %s (giữ nguyên: %s)", ", ".join(values), ", ".join(kept) or "-")
     return {
         "success": True,
         "applied": sorted(applied_hot),
         "restartRequired": sorted(set(restart_keys)),
+        "kept": sorted(kept),
     }
 
 
@@ -549,9 +613,11 @@ def list_groups(workspace: str | None = Query(default=None)):
 @app.post("/api/asset-groups")
 def create_group(payload: dict = Body(...)):
     name = (payload.get("name") or "").strip()
-    root_domain = (payload.get("rootDomain") or "").strip().lower()
+    root_domain = (payload.get("rootDomain") or "").strip().lower().rstrip(".")
     if not name or not root_domain:
         raise HTTPException(status_code=400, detail="Name and rootDomain are required")
+    if not VALID_HOST_RE.match(root_domain):
+        raise HTTPException(status_code=400, detail="rootDomain is not a valid domain (VD: example.com)")
     workspace_id = (payload.get("workspaceId") or "").strip() or None
     group = {
         "id": db.new_id("group"),
@@ -578,6 +644,9 @@ def create_group(payload: dict = Body(...)):
              db.dumps(group["meta"]) if group["meta"] else None,
              workspace_id, group["createdAt"], group["lastScanned"]),
         )
+        inventory.create_discovered_assets(conn, {
+            "id": group["id"], "rootDomain": root_domain, "workspaceId": workspace_id,
+        }, group["subdomains"] + [root_domain])
     return {**group, "assetCount": len(group["subdomains"])}
 
 
@@ -607,6 +676,14 @@ def update_group(group_id: str, payload: dict = Body(...)):
         if updates:
             params.append(group_id)
             conn.execute(f"UPDATE asset_groups SET {', '.join(updates)} WHERE id=?", params)
+        if isinstance(payload.get("subdomains"), list):
+            # Subdomain mới discover tự động thành asset "chưa quét" — số rows
+            # trong group khớp con số services trên card.
+            inventory.create_discovered_assets(conn, {
+                "id": group_id,
+                "rootDomain": row["root_domain"],
+                "workspaceId": row["workspace_id"],
+            }, payload["subdomains"])
         row = conn.execute("SELECT * FROM asset_groups WHERE id=?", (group_id,)).fetchone()
         return db.group_row_to_dict(row)
 
@@ -775,18 +852,34 @@ def update_alert(alert_id: str, payload: dict = Body(...)):
         return {"success": True, "alert": db.alert_row_to_dict(row)}
 
 
+@app.post("/api/cve/import-text")
+async def import_cve_text(payload: dict = Body(...)):
+    """Dán 1 hoặc nhiều tin nhắn CVE (copy từ nhóm feed Telegram) — parse bằng
+    AGI rồi đưa vào hệ thống ngay. Bot Telegram không đọc được lịch sử chat
+    nên đây là đường nhập cho các tin đã gửi trước đó. Body: {text, notify?}"""
+    text = (payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    notify = bool(payload.get("notify"))
+    stats = await asyncio.to_thread(telegram_listener.process_text_sync, text, notify)
+    with db.get_conn() as conn:
+        rows = conn.execute("SELECT * FROM cves ORDER BY pushed_at DESC").fetchall()
+    return {"success": True, **stats, "cves": [db.cve_row_to_dict(r) for r in rows]}
+
+
 @app.post("/api/cve/agent/run")
 def agent_run():
     with db.get_conn() as conn:
-        alerts = cve_engine.run_agent(conn)
+        rows, new_count = cve_engine.run_agent(conn)
         n_assets = conn.execute("SELECT COUNT(*) c FROM assets").fetchone()["c"]
         n_cves = conn.execute("SELECT COUNT(*) c FROM cves").fetchone()["c"]
     return {
         "success": True,
         "totalScannedAssets": n_assets,
         "totalCves": n_cves,
-        "totalAlertsMatched": len(alerts),
-        "alerts": alerts,
+        "totalAlertsMatched": len(rows),
+        "newAlerts": new_count,
+        "alerts": rows,
     }
 
 

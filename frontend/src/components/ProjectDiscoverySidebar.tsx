@@ -26,11 +26,13 @@ import {
   Sun,
   Moon,
 } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { AssetGroup, Workspace } from '../types';
 
-export type MainNavSection = 
+export type MainNavSection =
   | 'dashboard'
   | 'cve-alerts'
+  | 'cve-database'
   | 'scans'
   | 'inventory'
   | 'asset-groups'
@@ -48,11 +50,13 @@ interface ProjectDiscoverySidebarProps {
   onOpenImportCsv: () => void;
   onOpenCreateScan: () => void;
   onOpenCreateCron: () => void;
+  onOpenCreateGroup: () => void;
   onOpenBotWebhook?: () => void;
   inventoryCount: number;
   cronJobsCount: number;
   cveAlertsCount?: number;
   cveCriticalCount?: number;
+  cveTotalCount?: number;
   isOpen: boolean;
   onToggleOpen: () => void;
   isMobileOpen?: boolean;
@@ -74,11 +78,13 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
   onOpenImportCsv,
   onOpenCreateScan,
   onOpenCreateCron,
+  onOpenCreateGroup,
   onOpenBotWebhook,
   inventoryCount,
   cronJobsCount,
   cveAlertsCount = 0,
   cveCriticalCount = 0,
+  cveTotalCount = 0,
   isOpen,
   onToggleOpen,
   isMobileOpen = false,
@@ -176,8 +182,9 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
               <ChevronDown className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
             </button>
 
-            {teamDropdownOpen && (
-              <div className="fixed inset-0 z-30" onClick={() => setTeamDropdownOpen(false)} />
+            {teamDropdownOpen && createPortal(
+              <div className="fixed inset-0 z-40" onClick={() => setTeamDropdownOpen(false)} />,
+              document.body,
             )}
             {teamDropdownOpen && (
               <div className="absolute left-0 right-0 top-full mt-1 bg-white dark:bg-[#141828] border border-slate-200 dark:border-[#262c44] rounded-lg shadow-2xl p-1.5 z-40 text-xs">
@@ -234,11 +241,30 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
             {isOpen && <ChevronDown className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />}
           </button>
 
-          {createDropdownOpen && (
-            <div className="fixed inset-0 z-30" onClick={() => setCreateDropdownOpen(false)} />
+          {createDropdownOpen && createPortal(
+            <div className="fixed inset-0 z-40" onClick={() => setCreateDropdownOpen(false)} />,
+            document.body,
           )}
           {createDropdownOpen && (
             <div className="absolute left-0 top-full mt-1.5 w-60 bg-white dark:bg-[#121626] border border-slate-200 dark:border-[#262d47] rounded-xl shadow-2xl p-1.5 z-50 text-xs animate-in fade-in-50 duration-150">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateDropdownOpen(false);
+                  onOpenCreateGroup();
+                  if (onCloseMobile) onCloseMobile();
+                }}
+                className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-[#1c2238] text-slate-700 dark:text-slate-200 hover:text-slate-900 dark:hover:text-white transition-colors text-left"
+              >
+                <div className="w-7 h-7 rounded bg-violet-500/10 flex items-center justify-center text-violet-600 dark:text-violet-400 shrink-0">
+                  <Layers className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-semibold text-xs">New Asset Group</div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400">Tạo nhóm với tên tuỳ ý</div>
+                </div>
+              </button>
+
               <button
                 type="button"
                 onClick={() => {
@@ -351,6 +377,27 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
           )}
         </button>
 
+        {/* CVE Database (dùng chung mọi workspace) */}
+        <button
+          type="button"
+          onClick={() => handleNavClick('cve-database')}
+          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
+            currentSection === 'cve-database'
+              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 dark:border-transparent dark:bg-[#1a1f33] dark:text-white font-semibold'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#111422]'
+          }`}
+        >
+          <Globe className="w-4 h-4 shrink-0 text-emerald-500 dark:text-emerald-400" />
+          {isOpen && (
+            <div className="flex-1 flex items-center justify-between min-w-0">
+              <span className="flex-1">Kho CVE (Dùng chung)</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25">
+                {cveTotalCount}
+              </span>
+            </div>
+          )}
+        </button>
+
         {/* Dashboard Overview */}
         <button
           type="button"
@@ -396,7 +443,7 @@ export const ProjectDiscoverySidebar: React.FC<ProjectDiscoverySidebarProps> = (
           {isOpen && <span className="flex-1">Inventory</span>}
           {isOpen && (
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-              {inventoryCount > 0 ? inventoryCount : 637}
+              {inventoryCount}
             </span>
           )}
         </button>

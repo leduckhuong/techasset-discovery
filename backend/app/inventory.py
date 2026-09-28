@@ -1,6 +1,11 @@
 """Lưu trữ / cập nhật asset sau khi quét. Mỗi lần upsert đều chạy lại CVE agent
 để phát hiện cảnh báo mới ngay lập tức (tech mới có thể dính CVE đã biết)."""
+import re
+from datetime import datetime, timezone
+
 from . import db
+
+_HOST_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
 
 UPSERT_SQL = """
 INSERT INTO assets (id, url, final_url, host, port, scheme, status_code, status_text,
@@ -48,3 +53,33 @@ def upsert_asset(conn, result: dict) -> str:
         ),
     )
     return asset_id
+
+
+def create_discovered_assets(conn, group: dict, subdomains: list[str]) -> int:
+    """Tạo asset trạng thái 'chưa quét' (statusCode=0, label 'discovered') cho
+    subdomain mới discover để group view / inventory hiện đủ số rows như con số
+    trên card. Bỏ qua host đã có asset (đã quét hoặc đã tạo lần trước)."""
+    now = datetime.now(timezone.utc).isoformat()
+    created = 0
+    seen: set[str] = set()
+    for sub in subdomains or []:
+        host = (sub or "").strip().lower().rstrip(".").removeprefix("http://").removeprefix("https://")
+        host = host.split("/")[0]
+        if not host or host in seen or "." not in host or not _HOST_RE.match(host):
+            continue
+        seen.add(host)
+        if conn.execute("SELECT 1 FROM assets WHERE host = ? LIMIT 1", (host,)).fetchone():
+            continue
+        upsert_asset(conn, {
+            "url": f"https://{host}",
+            "host": host,
+            "port": None,
+            "scheme": "https",
+            "statusCode": 0,
+            "labels": ["discovered"],
+            "assetGroupId": group.get("id"),
+            "workspaceId": group.get("workspaceId"),
+            "timestamp": now,
+        })
+        created += 1
+    return created

@@ -48,13 +48,26 @@ def start() -> bool:
     _running = True
     _thread_poll = threading.Thread(target=_poll_loop, daemon=True, name="tg-poll")
     _thread_poll.start()
-    for i in range(config.TELEGRAM_QUEUE_WORKERS):
-        threading.Thread(target=_worker, daemon=True, name=f"tg-worker-{i}").start()
+    ensure_workers()
     log.info(
         "telegram listener ON (feed %s) — %d workers, queue max %d",
         config.TELEGRAM_CHAT_ID, config.TELEGRAM_QUEUE_WORKERS, config.TELEGRAM_QUEUE_MAXSIZE,
     )
     return True
+
+
+_workers_started = False
+
+
+def ensure_workers() -> None:
+    """Đảm bảo worker threads đang chạy — cần cho cả backfill qua user session
+    khi bot listener chưa bật (workers không phụ thuộc bot token)."""
+    global _workers_started
+    if _workers_started:
+        return
+    _workers_started = True
+    for i in range(config.TELEGRAM_QUEUE_WORKERS):
+        threading.Thread(target=_worker, daemon=True, name=f"tg-worker-{i}").start()
 
 
 def stop() -> None:
@@ -116,7 +129,32 @@ def _worker() -> None:
             _stat["processed"] += 1
 
 
-def _process_cve(cve_id: str, text: str) -> None:
+def process_text_sync(text: str, notify: bool = False) -> dict:
+    """Import tay: parse TOÀN BỘ CVE-ID trong 1 text (dán từ nhóm feed) và xử lý
+    NGAY tại đây (không qua hàng đợi — dùng được cả khi listener đang tắt).
+    Mặc định không gửi report Telegram để tránh spam khi import hàng loạt."""
+    cve_ids = list(dict.fromkeys(CVE_RE.findall(text or "")))
+    stats = {"found": len(cve_ids), "imported": 0, "skipped": 0}
+    for cve_id in cve_ids:
+        cve_id = cve_id.upper()
+        with _pending_lock:
+            if cve_id in _pending:
+                stats["skipped"] += 1
+                continue
+            _pending.add(cve_id)
+        try:
+            _process_cve(cve_id, text, notify=notify)
+            stats["imported"] += 1
+        except Exception:
+            log.exception("import CVE %s lỗi", cve_id)
+            stats["skipped"] += 1
+        finally:
+            with _pending_lock:
+                _pending.discard(cve_id)
+    return stats
+
+
+def _process_cve(cve_id: str, text: str, notify: bool = True) -> None:
     # CVE đã có trong DB -> bỏ qua (không re-parse, không re-report)
     with db.get_conn() as conn:
         exists = conn.execute("SELECT 1 FROM cves WHERE cve_id = ?", (cve_id,)).fetchone()
@@ -193,6 +231,9 @@ def _process_cve(cve_id: str, text: str) -> None:
 
     from . import telegram
 
+    if not notify:
+        log.info("%s: bỏ qua gửi report Telegram (notify=False)", cve_id)
+        return
     ok, detail = telegram.send_message("\n".join(lines))
     if not ok:
         log.warning("gửi report %s thất bại: %s", cve_id, detail)

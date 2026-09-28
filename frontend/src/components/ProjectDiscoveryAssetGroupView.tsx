@@ -23,6 +23,7 @@ import {
   Sparkles,
   Radar,
   Boxes,
+  Pencil,
 } from 'lucide-react';
 import { ScanResult, AssetGroup, CveMatchAlert } from '../types';
 import { FacetTabDef, FacetTabs } from './FacetTabs';
@@ -41,6 +42,7 @@ interface ProjectDiscoveryAssetGroupViewProps {
   onSelectAsset: (asset: ScanResult) => void;
   onDeleteAsset: (id: string) => void;
   onDiscoverSubdomains?: (engine: 'subfinder' | 'crtsh') => void;
+  onRenameGroup?: (groupId: string, newName: string) => Promise<void> | void;
   discoveringSubs?: boolean;
   onScanGroupTech?: () => void;
   scanningGroup?: boolean;
@@ -61,6 +63,7 @@ export const ProjectDiscoveryAssetGroupView: React.FC<ProjectDiscoveryAssetGroup
   onSelectAsset,
   onDeleteAsset,
   onDiscoverSubdomains,
+  onRenameGroup,
   discoveringSubs = false,
   onScanGroupTech,
   scanningGroup = false,
@@ -69,6 +72,9 @@ export const ProjectDiscoveryAssetGroupView: React.FC<ProjectDiscoveryAssetGroup
   probingPorts = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'data' | 'screenshots' | 'history'>('data');
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [renaming, setRenaming] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [facetTab, setFacetTab] = useState<string | null>(null);
   const [facetValue, setFacetValue] = useState<string | null>(null);
@@ -240,6 +246,51 @@ export const ProjectDiscoveryAssetGroupView: React.FC<ProjectDiscoveryAssetGroup
               <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white font-sans flex items-center gap-2.5">
                 {assetGroup.name}
               </h1>
+              {onRenameGroup && !editingName && (
+                <button
+                  type="button"
+                  onClick={() => { setNameDraft(assetGroup.name); setEditingName(true); }}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+                  title="Đổi tên nhóm"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {editingName && (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && nameDraft.trim()) {
+                        setRenaming(true);
+                        Promise.resolve(onRenameGroup(assetGroup.id, nameDraft.trim())).finally(() => { setEditingName(false); setRenaming(false); });
+                      }
+                      if (e.key === 'Escape') setEditingName(false);
+                    }}
+                    className="bg-white dark:bg-[#0d1120] border border-indigo-400 rounded px-2 py-1 text-sm font-semibold text-slate-900 dark:text-white focus:outline-none w-56"
+                  />
+                  <button
+                    type="button"
+                    disabled={!nameDraft.trim() || renaming}
+                    onClick={() => {
+                      setRenaming(true);
+                      Promise.resolve(onRenameGroup(assetGroup.id, nameDraft.trim())).finally(() => { setEditingName(false); setRenaming(false); });
+                    }}
+                    className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    Lưu
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingName(false)}
+                    className="px-2 py-1 rounded bg-slate-200 dark:bg-[#1a2033] text-slate-600 dark:text-slate-300 text-xs font-semibold cursor-pointer"
+                  >
+                    Huỷ
+                  </button>
+                </div>
+              )}
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
               Kho lưu trữ tài sản số & tech stack được quét bởi bộ quét tự động. Kết nối tự động với Agent cảnh báo khi bot đẩy mã CVE trùng phiên bản.
@@ -546,7 +597,8 @@ export const ProjectDiscoveryAssetGroupView: React.FC<ProjectDiscoveryAssetGroup
           paginatedAssets.map((asset) => {
             const isRedirect = asset.statusCode >= 300 && asset.statusCode < 400;
             const isSuccess = asset.statusCode >= 200 && asset.statusCode < 300;
-            const isError = asset.statusCode >= 400 || asset.statusCode === 0;
+            const isUnscanned = asset.statusCode === 0 && !asset.error;
+            const isError = (asset.statusCode >= 400 || asset.statusCode === 0) && !isUnscanned;
             const assetCveMatches = cveAlerts.filter(
               (a) => a.matchedAssetId === asset.id || a.assetHost.toLowerCase() === asset.host.toLowerCase()
             );
@@ -601,6 +653,14 @@ export const ProjectDiscoveryAssetGroupView: React.FC<ProjectDiscoveryAssetGroup
                     )}
 
                     {/* Status Code Badge */}
+                    {isUnscanned && (
+                      <span
+                        className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200 dark:bg-[#161a29] dark:text-slate-400 dark:border-[#272e48]"
+                        title="Subdomain đã dò thấy nhưng chưa quét — bấm 'Quét Tech Stack' để quét"
+                      >
+                        Chưa quét
+                      </span>
+                    )}
                     {isSuccess && (
                       <span className="px-2 py-0.5 rounded font-mono text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-[#14532d]/80 dark:text-emerald-300 dark:border-emerald-500/40">
                         {asset.statusCode} OK

@@ -71,7 +71,7 @@ def start_job(items: list[dict], cfg: dict, timeout_sec: int, workspace_id: str 
 def _upsert_group(conn, root: str, name: str, subdomains: list[str], tags: list[str],
                   meta: dict, workspace_id: str | None = None) -> str:
     row = conn.execute(
-        "SELECT id, subdomains_json, meta_json FROM asset_groups WHERE root_domain = ?", (root,)
+        "SELECT id, subdomains_json, meta_json, workspace_id FROM asset_groups WHERE root_domain = ?", (root,)
     ).fetchone()
     if row:
         old_subs = db.loads(row["subdomains_json"], []) or []
@@ -82,8 +82,10 @@ def _upsert_group(conn, root: str, name: str, subdomains: list[str], tags: list[
             "UPDATE asset_groups SET subdomains_json=?, meta_json=? WHERE id=?",
             (db.dumps(merged), db.dumps(merged_meta), row["id"]),
         )
+        ws = workspace_id or row["workspace_id"]
         if workspace_id and not row["workspace_id"]:
             conn.execute("UPDATE asset_groups SET workspace_id=? WHERE id=?", (workspace_id, row["id"]))
+        inventory.create_discovered_assets(conn, {"id": row["id"], "rootDomain": root, "workspaceId": ws}, merged)
         return row["id"]
     group_id = f"group-{uuid.uuid4().hex[:8]}"
     conn.execute(
@@ -97,6 +99,7 @@ def _upsert_group(conn, root: str, name: str, subdomains: list[str], tags: list[
             workspace_id, _now(), _now(),
         ),
     )
+    inventory.create_discovered_assets(conn, {"id": group_id, "rootDomain": root, "workspaceId": workspace_id}, subdomains)
     return group_id
 
 

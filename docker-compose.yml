@@ -30,6 +30,8 @@ services:
       - ./certs:/app/certs
       # API keys cho subfinder (provider-config.yaml)
       - ${HOME}/.config/subfinder:/root/.config/subfinder
+      # Backend .env — mount để update env không cần rebuild
+      - ./backend/.env:/app/backend/.env
     # Cấu hình qua biến môi trường (xem backend/.env.example):
     # environment:
     #   CVE_PUSH_API_KEY: "dat-key-o-day"

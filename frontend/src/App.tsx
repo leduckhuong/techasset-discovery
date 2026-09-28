@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ProjectDiscoverySidebar, MainNavSection } from './components/ProjectDiscoverySidebar';
 import { AdminSettingsView } from './components/AdminSettingsView';
 import { ProjectDiscoveryAssetGroupView } from './components/ProjectDiscoveryAssetGroupView';
 import { AssetGroupsTableView } from './components/AssetGroupsTableView';
 import { TechAssetDetailView } from './components/TechAssetDetailView';
 import { CsvImportModal } from './components/CsvImportModal';
+import { CreateGroupModal } from './components/CreateGroupModal';
 import { CrontabScanManager } from './components/CrontabScanManager';
 import { DashboardOverview } from './components/DashboardOverview';
 import { ScanInputCard } from './components/ScanInputCard';
@@ -19,6 +20,7 @@ import { ScannerTerminal } from './components/ScannerTerminal';
 import { VueQuasarCodeModal } from './components/VueQuasarCodeModal';
 import { AssetDetailDialog } from './components/AssetDetailDialog';
 import { CveAlertsAgentView } from './components/CveAlertsAgentView';
+import { CveDatabaseView } from './components/CveDatabaseView';
 import { BotWebhookModal } from './components/BotWebhookModal';
 import { ScanResult, ScanOptions, TargetPreset, AssetGroup, CrontabScanJob, CveItem, CveMatchAlert, CsvImportPreviewItem, ImportScanConfig } from './types';
 import { runAgentFullCorrelation } from './utils/cveMatcher';
@@ -82,6 +84,7 @@ export default function App() {
 
   // Dialog & Modal states
   const [isImportCsvOpen, setIsImportCsvOpen] = useState(false);
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isVueCodeOpen, setIsVueCodeOpen] = useState(false);
   const [selectedAssetDetail, setSelectedAssetDetail] = useState<ScanResult | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -140,22 +143,13 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Fetch backend Crontab Jobs, Asset Groups, Assets, and CVEs
+  // Fetch backend Crontab Jobs, CVEs, Workspaces (workspace-agnostic data)
   useEffect(() => {
     fetch('/api/cron-jobs')
       .then((res) => res.json())
       .then((data) => {
         if (data.jobs && Array.isArray(data.jobs)) {
           setCrontabJobs(data.jobs);
-        }
-      })
-      .catch(() => {});
-
-    fetch('/api/asset-groups')
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setAssetGroups(data);
         }
       })
       .catch(() => {});
@@ -178,18 +172,6 @@ export default function App() {
       })
       .catch(() => {});
 
-    fetch('/api/assets')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.assets && Array.isArray(data.assets) && data.assets.length > 0) {
-          setAssets((prev) => {
-            const existingUrls = new Set(data.assets.map((a: any) => a.url));
-            return [...data.assets, ...prev.filter((a) => !existingUrls.has(a.url))];
-          });
-          setScanLog((prev) => (prev.length > 0 ? prev : [...data.assets].slice().reverse()));
-        }
-      })
-      .catch(() => {});
 
     fetch('/api/workspaces')
       .then((res) => res.json())
@@ -336,6 +318,41 @@ export default function App() {
     showToast(`Đã cập nhật trạng thái cảnh báo sang: ${status}`);
   };
 
+  // Đổi tên asset group (PATCH) + cập nhật state
+  const handleRenameGroup = async (groupId: string, newName: string) => {
+    try {
+      const res = await fetch(`/api/asset-groups/${groupId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const updated = await res.json();
+      setAssetGroups((prev) => prev.map((g) => (g.id === groupId ? updated : g)));
+      showToast(`Đã đổi tên nhóm thành "${newName}"`);
+    } catch {
+      showToast('Đổi tên nhóm thất bại');
+    }
+  };
+
+  // Import CVE từ text dán tay (Telegram Bot API không đọc được lịch sử nhóm feed)
+  const handleImportCveText = async (text: string, notify: boolean) => {
+    const res = await fetch('/api/cve/import-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, notify }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (Array.isArray(data.cves)) setCves(data.cves);
+    // refresh alerts sau khi agent rà lại
+    fetch('/api/cve/alerts')
+      .then((r) => r.json())
+      .then((d) => { if (Array.isArray(d.alerts)) setCveAlerts(d.alerts); })
+      .catch(() => {});
+    return { found: data.found ?? 0, imported: data.imported ?? 0, skipped: data.skipped ?? 0 };
+  };
+
   // Run Scan Logic
   const handleStartScan = async (urlsToScan?: string[]) => {
     const list = urlsToScan || urlsInput.split('\n').map((u) => u.trim()).filter(Boolean);
@@ -364,6 +381,7 @@ export default function App() {
             techDetect: scanOptions.techDetect,
             followRedirects: scanOptions.followRedirects,
             nuclei: scanOptions.nuclei,
+            workspaceId: currentWorkspaceId,
           }),
         });
 
@@ -588,6 +606,7 @@ export default function App() {
           items,
           config,
           timeoutSec: scanOptions.timeoutSec,
+          workspaceId: currentWorkspaceId,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -603,15 +622,13 @@ export default function App() {
         setCurrentScanningHost(job.phase || '');
         setProgressPercent(Math.round(job.progress || 0));
         if (job.status === 'done' || job.status === 'error') {
-          // refresh dữ liệu từ server
-          const [aRes, gRes] = await Promise.all([fetch('/api/assets'), fetch('/api/asset-groups')]);
+          // refresh dữ liệu từ server (workspace-scoped)
+          const aRes = await fetch(`/api/assets?workspace=${currentWorkspaceId}`);
           const aData = await aRes.json();
-          const gData = await gRes.json();
           if (Array.isArray(aData.assets)) {
             setAssets(aData.assets);
             setScanLog([...aData.assets].reverse());
           }
-          if (Array.isArray(gData)) setAssetGroups(gData);
           if (job.status === 'error') throw new Error(job.error || 'pipeline lỗi');
           showToast(`Import hoàn tất: ${job.summary}`);
           break;
@@ -695,8 +712,20 @@ export default function App() {
   const currentAssetGroup =
     assetGroups.find((g) => g.id === selectedGroupId) || assetGroups[0];
 
-  // Assets thuộc đúng group đang mở (chỉ asset được gán vào group này)
-  const groupAssets = assets.filter((a) => a.assetGroupId === selectedGroupId);
+  // Assets thuộc group đang mở: ưu tiên assetGroupId, fallback theo root domain
+  // (asset cũ import trước khi có group không có assetGroupId nhưng vẫn thuộc
+  //  nhóm theo host — host == rootDomain hoặc đuôi .rootDomain)
+  const groupAssets = useMemo(() => {
+    const group = currentAssetGroup;
+    if (!group) return [];
+    const root = (group.rootDomain || '').toLowerCase();
+    return assets.filter((a) => {
+      if (a.assetGroupId === group.id) return true;
+      if (!root) return false;
+      const host = (a.host || '').toLowerCase().trim();
+      return host === root || host.endsWith('.' + root);
+    });
+  }, [assets, currentAssetGroup]);
 
   return (
     <div className="flex h-screen bg-slate-100 dark:bg-[#07090e] text-slate-800 dark:text-slate-100 font-sans overflow-hidden transition-colors duration-200">
@@ -735,6 +764,7 @@ export default function App() {
           setCurrentSection('asset-groups');
         }}
         onOpenImportCsv={() => setIsImportCsvOpen(true)}
+        onOpenCreateGroup={() => setIsCreateGroupOpen(true)}
         onOpenCreateScan={() => setCurrentSection('scans')}
         onOpenCreateCron={() => setCurrentSection('crontab')}
         onOpenBotWebhook={() => setIsBotWebhookOpen(true)}
@@ -742,6 +772,7 @@ export default function App() {
         cronJobsCount={crontabJobs.filter((j) => j.enabled).length}
         cveAlertsCount={cveAlerts.filter((a) => a.status !== 'resolved').length}
         cveCriticalCount={cveAlerts.filter((a) => a.severity === 'CRITICAL' && a.status !== 'resolved').length}
+        cveTotalCount={cves.length}
         isOpen={sidebarOpen}
         onToggleOpen={() => setSidebarOpen(!sidebarOpen)}
         isMobileOpen={mobileMenuOpen}
@@ -902,6 +933,14 @@ export default function App() {
               />
             )}
 
+            {currentSection === 'cve-database' && (
+              <CveDatabaseView
+                cves={cves}
+                alerts={cveAlerts}
+                onImportCveText={handleImportCveText}
+              />
+            )}
+
             {/* View 1: Asset Groups Hierarchical Flow (Level 1: Groups Table -> Level 2: Group Assets Table -> Level 3: Tech Asset Detail) */}
             {currentSection === 'asset-groups' && (
               <>
@@ -936,6 +975,7 @@ export default function App() {
                     groupScanPhase={groupScan?.phase}
                     onProbePorts={() => handleProbePorts(currentAssetGroup.id)}
                     probingPorts={probingGroupId === currentAssetGroup.id}
+                    onRenameGroup={handleRenameGroup}
                   />
                 ) : (
                   /* Level 1: Bảng Danh Sách Asset Groups (Image 1) */
@@ -947,7 +987,7 @@ export default function App() {
                       setSelectedGroupId(group.id);
                       setSelectedAssetForTech(null);
                     }}
-                    onOpenCreateGroup={() => setIsImportCsvOpen(true)}
+                    onOpenCreateGroup={() => setIsCreateGroupOpen(true)}
                     onOpenImportCsv={() => setIsImportCsvOpen(true)}
                   />
                 )}
@@ -1123,6 +1163,23 @@ export default function App() {
           setCurrentSection('crontab');
         }}
         existingAssetGroups={assetGroups}
+      />
+
+      {/* Create Asset Group Modal */}
+      <CreateGroupModal
+        open={isCreateGroupOpen}
+        onClose={() => setIsCreateGroupOpen(false)}
+        onCreated={async (group) => {
+          // refresh groups theo workspace rồi nhảy thẳng vào group mới
+          fetch(`/api/asset-groups?workspace=${currentWorkspaceId}`)
+            .then((r) => r.json())
+            .then((data) => { if (Array.isArray(data)) setAssetGroups(data); })
+            .catch(() => {});
+          setAssetGroups((prev) => [group, ...prev]);
+          setSelectedGroupId(group.id);
+          setCurrentSection('asset-groups');
+          showToast(`Đã tạo nhóm "${group.name}"`);
+        }}
       />
 
       {/* Asset Detail Dialog */}

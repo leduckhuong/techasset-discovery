@@ -320,9 +320,12 @@ export const AssetTable: React.FC<AssetTableProps> = ({
       );
     }
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-700">
-        <XCircle className="w-3 h-3 text-slate-500" />
-        0 Failed
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-slate-200 text-slate-600 dark:bg-[#1a2033] dark:text-slate-300"
+        title="Subdomain đã dò thấy nhưng chưa quét — chạy 'Quét Tech Stack' trên group để quét"
+      >
+        <Clock className="w-3 h-3" />
+        Chưa quét
       </span>
     );
   };
